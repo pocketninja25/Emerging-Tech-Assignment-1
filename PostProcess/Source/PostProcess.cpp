@@ -301,7 +301,7 @@ void RenderScene( float updateTime )
 	// FIRST RENDER PASS - Render scene to texture
 
 	// Specify that the scene texture will be the render target in this first pass (rather than the backbuffer), will share the depth/stencil buffer with the backbuffer though
-	g_pd3dDevice->OMSetRenderTargets( 1, /*MISSING - specify scene texture as render target (variables near top of file)*/, DepthStencilView );
+	g_pd3dDevice->OMSetRenderTargets( 1, &SceneRenderTarget/*MISSING - specify scene texture as render target (variables near top of file)*/, DepthStencilView );
 
 	// Clear the texture and the depth buffer
 	g_pd3dDevice->ClearRenderTargetView( SceneRenderTarget, &AmbientColour.r );
@@ -331,7 +331,7 @@ void RenderScene( float updateTime )
 		case Tint:
 		{
 			// Set the colour used to tint the scene
-			D3DXCOLOR TintColour/* = ?? FILTER - Make a nice colour*/;
+			D3DXCOLOR TintColour = D3DXCOLOR(1.0f, 1.0f, 0.0f, 1.0f);
 			TintColourVar->SetRawValue( &TintColour, 0, 12 );
 		}
 		break;
@@ -345,7 +345,7 @@ void RenderScene( float updateTime )
 			NoiseScaleVar->SetRawValue( &NoiseScale, 0, 8 );
 
 			// The offset is randomised to give a constantly changing noise effect (like tv static)
-			CVector2 RandomUVs = CVector2( /*FILTER - 2 random UVs please*/ );
+			CVector2 RandomUVs = CVector2( Random(0.0f, 1.0f), Random(0.0f, 1.0f) );
 			NoiseOffsetVar->SetRawValue( &RandomUVs, 0, 8 );
 
 			// Set noise texture
@@ -400,15 +400,15 @@ void RenderScene( float updateTime )
 
 	// Select the back buffer to use for rendering (will ignore depth-buffer for full-screen quad) and select scene texture for use in shader
 	// Not going to clear the back-buffer, we're going to overwrite it all
-	g_pd3dDevice->OMSetRenderTargets( 1, /*MISSING, 2nd pass specify back buffer as render target*/, DepthStencilView ); 
-	SceneTextureVar->SetResource( /*MISSING, 2nd pass, will use scene texture in shaders - i.e. as a shader resource, again check available variables*/ );
+	g_pd3dDevice->OMSetRenderTargets( 1, &BackBufferRenderTarget/*MISSING, 2nd pass specify back buffer as render target*/, DepthStencilView ); 
+	SceneTextureVar->SetResource( SceneShaderResource/*MISSING, 2nd pass, will use scene texture in shaders - i.e. as a shader resource, again check available variables*/ );
 
 	// Using special vertex shader than creates its own data for a full screen quad (see .fx file). No need to set vertex/index buffer, just draw 4 vertices of quad
 	// Select technique to match currently selected post-process
 	g_pd3dDevice->IASetInputLayout( NULL );
 	g_pd3dDevice->IASetPrimitiveTopology( D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP );
 	PPTechniques[CurrentPostProcess]->GetPassByIndex(0)->Apply(0);
-	g_pd3dDevice->Draw( /*MISSING - Post-process pass renderes a quad*/, 0 );
+	g_pd3dDevice->Draw( 4/*MISSING - Post-process pass renderes a quad*/, 0 );
 
 	// These two lines unbind the scene texture from the shader to stop DirectX issuing a warning when we try to render to it again next frame
 	SceneTextureVar->SetResource( 0 );

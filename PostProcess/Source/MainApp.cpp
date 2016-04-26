@@ -92,7 +92,7 @@ bool D3DSetup( HWND hWnd )
 	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	sd.SampleDesc.Count = 1;
 	sd.SampleDesc.Quality = 0;
-	sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD; // Discard last frame's back buffer after it is shown, alternative is DXGI_SWAP_EFFECT_SEQUENTIAL, which retains the back buffer
+	sd.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL; // Discard last frame's back buffer after it is shown, alternative is DXGI_SWAP_EFFECT_SEQUENTIAL, which retains the back buffer
 	sd.OutputWindow = hWnd;                   // Target window
 	sd.Windowed = TRUE;                       // Whether to render in a window (TRUE) or go fullscreen (FALSE)
 	if (FAILED( D3D10CreateDeviceAndSwapChain( NULL, D3D10_DRIVER_TYPE_HARDWARE, NULL, D3D10_CREATE_DEVICE_DEBUG, D3D10_SDK_VERSION, &sd, &SwapChain, &g_pd3dDevice ) )) return false;

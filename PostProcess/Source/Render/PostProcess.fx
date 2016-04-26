@@ -91,7 +91,7 @@ PS_POSTPROCESS_INPUT FullScreenQuad(VS_POSTPROCESS_INPUT vIn)
 float4 PPCopyShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 {
 	float3 ppColour = SceneTexture.Sample( PointSample, ppIn.UV );
-	return float4( ppColour, 1.0f );
+	return float4( ppColour, 0.1f);
 }
 
 
@@ -99,20 +99,19 @@ float4 PPCopyShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 float4 PPTintShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 {
 	// Sample the texture colour (look at shader above) and multiply it with the tint colour (variables near top)
-	float3 ppColour = 0; /*FILTER - not 0*/
-	return float4( ppColour, 1.0f );
+	float3 ppColour = SceneTexture.Sample( PointSample, ppIn.UV) * TintColour;
+	return float4( ppColour, 0.1f);
 }
 
 
 // Post-processing shader that tints the scene texture to a given colour
 float4 PPGreyNoiseShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 {
-	const float NoiseStrength = 0.5f; // How noticable the noise is
+	const float NoiseStrength = 0.8f; // How noticable the noise is
 
 	// Get texture colour, and average r, g & b to get a single grey value
     float3 texColour = SceneTexture.Sample( PointSample, ppIn.UV );
-    float grey = 0/*FILTER - not 0, but a method to convert the r,g & b of texColour to
-                    a single grey-scale value (all components and result in range 0->1)*/;
+    float grey = (texColour.r + texColour.g + texColour.b) / 3;
     
     // Get noise UV by scaling and offseting texture UV. Scaling adjusts how fine the noise is.
     // The offset is randomised to give a constantly changing noise effect (like tv static)
@@ -120,7 +119,7 @@ float4 PPGreyNoiseShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
     grey += NoiseStrength * (PostProcessMap.Sample( TrilinearWrap, noiseUV ).r - 0.5f); // Noise can increase or decrease grey value
     
     // Output final colour
-	return float4( grey, grey, grey, 1.0f );
+	return float4( grey, grey, grey, 0.1f);
 }
 
 
@@ -131,8 +130,8 @@ float4 PPBurnShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 	const float4 White = 1.0f;
 	
 	// Pixels are burnt with these colours at the edges
-	const float4 BurnColour = float4(0.8f, 0.4f, 0.0f, 1.0f);
-	const float4 GlowColour = float4(1.0f, 0.8f, 0.0f, 1.0f);
+	const float4 BurnColour = float4(0.8f, 0.4f, 0.0f, 0.1f);
+	const float4 GlowColour = float4(1.0f, 0.8f, 0.0f, 0.1f);
 	const float GlowAmount = 0.15f; // Thickness of glowing area
 	const float Crinkle = 0.1f; // Amount of texture crinkle at the edges 
 
@@ -145,14 +144,14 @@ float4 PPBurnShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
     // Output black when current burn texture value below burning range
     if (burnTexture.r <= BurnLevel)
     {
-		return float4( 0.0f, 0.0f, 0.0f, 1.0f );
+		return float4( 1.0f, 1.0f, 1.0f, 1.0f );
 	}
     
     // Output scene texture untouched when current burnTexture texture value above burning range
 	else if (burnTexture.r >= BurnLevelMax)
     {
-		float3 ppColour = 0;/*FILTER, not 0, read the comment*/
-		return float4( ppColour, 1.0f );
+		float3 ppColour = SceneTexture.Sample(PointSample, ppIn.UV);
+		return float4( ppColour, 0.1f);
 	}
 	
 	else // Draw burning edges
@@ -163,7 +162,7 @@ float4 PPBurnShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 		float GlowLevel = 1.0f - (burnTexture.r - BurnLevel) / GlowAmount;
 
 		// Extract direction to crinkle (2D vector) from the g & b components of the burn texture sampled above (converting from 0->1 range to -0.5->0.5 range)
-		float2 CrinkleVector = /*FILTER, not 0, read the comment*/ - float2(0.5f, 0.5f);
+		float2 CrinkleVector = (burnTexture.g, burnTexture.b) - float2(0.5f, 0.5f);
 		
 		// Get main texture colour using crinkle offset
 	    float4 texColour =  SceneTexture.Sample( PointSample, ppIn.UV- GlowLevel * Crinkle * CrinkleVector );
@@ -180,7 +179,7 @@ float4 PPBurnShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 			// Blend from burn tint in middle of burning area to bright glow at the burning edges
 			ppColour = lerp( BurnColour * texColour, GlowColour, GlowLevel - 1.0f );
 		}
-		return float4( ppColour, 1.0f );
+		return float4( ppColour, 0.1f);
 	}
 }
 
@@ -194,15 +193,15 @@ float4 PPDistortShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
     float4 distortTexture = PostProcessMap.Sample( TrilinearWrap, ppIn.UV );
 
 	// Get direction (2D vector) to distort UVs from the g & b components of the distort texture (converting from 0->1 range to -0.5->0.5 range)
-	float2 DistortVector = 0/*FILTER - not 0, similar to crinkle vector used in burn shader above*/;
+	float2 DistortVector = (distortTexture.g, distortTexture.b) - float2(0.5f, 0.5f);
 			
 	// Simple fake diffuse lighting formula based on 2D vector, light coming from top-left
 	float light = dot( normalize(DistortVector), float2(0.707f, 0.707f) ) * LightStrength;
 	
 	// Get final colour by adding fake light colour plus scene texture sampled with distort texture offset
-	float3 ppColour = 0/*FILTER - not 0, read comment*/ + SceneTexture.Sample( PointSample, ppIn.UV + DistortLevel * DistortVector );
+	float3 ppColour = light + SceneTexture.Sample( PointSample, ppIn.UV + DistortLevel * DistortVector );
 
-    return float4( ppColour, 1.0f );
+    return float4( ppColour, 0.1f );
 }
 
 
@@ -211,7 +210,7 @@ float4 PPSpiralShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 {
 	// Get vector from UV centre to pixel UV
 	const float2 CentreUV = float2(0.5f, 0.5f);
-	float2 CentreOffsetUV = 0/*FILTER - not 0, read comment*/ - CentreUV;
+	float2 CentreOffsetUV = ppIn.UV - CentreUV;
 	float CentreDistance = length( CentreOffsetUV ); // Distance of pixel from UV (i.e. screen) centre
 	
 	// Get sin and cos of spiral amount, increasing with distance from centre
@@ -221,13 +220,13 @@ float4 PPSpiralShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 	// Create a (2D) rotation matrix and apply to the vector - i.e. rotate the
 	// vector around the centre by the spiral amount
 	matrix<float,2,2> Rot2D = { c, s,
-	                           -s, 0/*FILTER - not 0, it's a 2D rotation matrix...?*/ };
+	                           -s, c };
 	float2 RotOffsetUV = mul( CentreOffsetUV, Rot2D );
 
 	// Sample texture at new position (centre UV + rotated UV offset)
-    float3 ppColour = SceneTexture.Sample( PointSample, 0/*FILTER - not 0, read the comment*/ );
+    float3 ppColour = SceneTexture.Sample( PointSample, CentreUV + RotOffsetUV );
 
-    return float4( ppColour, 1.0f );
+    return float4( ppColour, 0.1f );
 }
 
 
@@ -272,7 +271,7 @@ technique10 PPCopy
         SetGeometryShader( NULL );                                   
         SetPixelShader( CompileShader( ps_4_0, PPCopyShader() ) );
 
-		SetBlendState( NoBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
+		SetBlendState( AlphaBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
 		SetRasterizerState( CullNone ); 
 		SetDepthStencilState( DisableDepth, 0 );
      }
@@ -288,7 +287,7 @@ technique10 PPTint
         SetGeometryShader( NULL );                                   
         SetPixelShader( CompileShader( ps_4_0, PPTintShader() ) );
 
-		SetBlendState( NoBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
+		SetBlendState(AlphaBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
 		SetRasterizerState( CullNone ); 
 		SetDepthStencilState( DisableDepth, 0 );
      }
@@ -303,7 +302,7 @@ technique10 PPGreyNoise
         SetGeometryShader( NULL );                                   
         SetPixelShader( CompileShader( ps_4_0, PPGreyNoiseShader() ) );
 
-		SetBlendState( NoBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
+		SetBlendState(AlphaBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
 		SetRasterizerState( CullNone ); 
 		SetDepthStencilState( DisableDepth, 0 );
      }
@@ -318,7 +317,7 @@ technique10 PPBurn
         SetGeometryShader( NULL );                                   
         SetPixelShader( CompileShader( ps_4_0, PPBurnShader() ) );
 
-		SetBlendState( NoBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
+		SetBlendState(AlphaBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
 		SetRasterizerState( CullNone ); 
 		SetDepthStencilState( DisableDepth, 0 );
      }
@@ -333,7 +332,7 @@ technique10 PPDistort
         SetGeometryShader( NULL );                                   
         SetPixelShader( CompileShader( ps_4_0, PPDistortShader() ) );
 
-		SetBlendState( NoBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
+		SetBlendState(AlphaBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
 		SetRasterizerState( CullNone ); 
 		SetDepthStencilState( DisableDepth, 0 );
      }
@@ -348,7 +347,7 @@ technique10 PPSpiral
         SetGeometryShader( NULL );                                   
         SetPixelShader( CompileShader( ps_4_0, PPSpiralShader() ) );
 
-		SetBlendState( NoBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
+		SetBlendState(AlphaBlending, float4( 0.0f, 0.0f, 0.0f, 0.0f ), 0xFFFFFFFF );
 		SetRasterizerState( CullNone ); 
 		SetDepthStencilState( DisableDepth, 0 );
      }

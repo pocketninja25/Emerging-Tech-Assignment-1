@@ -107,13 +107,14 @@ PS_POSTPROCESS_INPUT PPQuad(VS_POSTPROCESS_INPUT vIn)
 	float2 Quad[4] =  { float2(0.0, 0.0),   // Top-left
 	                    float2(1.0, 0.0),   // Top-right
 	                    float2(0.0, 1.0),   // Bottom-left
-	                    float2(1.0, 1.0) }; // Bottom-right
+	                    float2(1.0, 1.0)	// Bottom-right
+	};
 
 	//***TODO - Complete each of the sections below. As usual with shaders there is much detail compressed into little code, read the comments to help
 
 	// vOut.UVArea contains UVs for the area itself: (0,0) at top-left of area, (1,1) at bottom right. Simply the values stored in the Quad array above.
 	//   So just index that array with the vertex ID (0 to 3) found inside the input structure vIn
-	vOut.UVArea = //ADD CODE HERE
+	vOut.UVArea = Quad[vIn.vertexId];
 
 
 	// vOut.UVScene contains UVs for the section of the scene texture to use. The top-left and bottom-right coordinates are already provided in
@@ -122,7 +123,7 @@ PS_POSTPROCESS_INPUT PPQuad(VS_POSTPROCESS_INPUT vIn)
 	//   from PPAreaBottomRight. This is a use for lerp: use a lerp between the values PPAreaTopLeft and PPAreaBottomRight, based on the values
 	//   from the Quad array. This may seem strange, but provides flexibility later...
 	//   I will go over this in the lab as necessary (or look at next week's lab for solution when available)
-	vOut.UVScene = //ADD CODE HERE
+	vOut.UVScene = lerp(PPAreaTopLeft, PPAreaBottomRight, vOut.UVArea);
 	             
 	// vOut.ProjPos contains the vertex positions of the quad to render, measured in viewport space here. This is a float4, so set x, y, z & w:
 	//   The x and y coordinates are the same as the UVScene coordinates just calculated on the line above, *except* the range is
@@ -130,8 +131,10 @@ PS_POSTPROCESS_INPUT PPQuad(VS_POSTPROCESS_INPUT vIn)
 	//   Afterwards the y axis must be negated since UV space y-axis is down and viewport space y-axis is up
 	//   The z value is the depth buffer value provided in the PPAreaDepth variable
 	//   The w value must be 1.0f to avoid doing a perspective divide (did that already in the C++)
-	vOut.ProjPos;
-	//ADD CODE HERE - fill in vOut.ProjPos.x, y, z & w
+	vOut.ProjPos.xy = (vOut.UVScene.xy * 2) - 1; //Modify Position range
+	vOut.ProjPos.y = -vOut.ProjPos.y;			 //Invert Y axis
+	vOut.ProjPos.z = PPAreaDepth;				 //Get Depth buffer value
+	vOut.ProjPos.w = 1.0f;						 //Avoid Perspective Divide
 	
     return vOut;
 }
@@ -177,7 +180,7 @@ float4 PPGreyNoiseShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 
 	// Calculate alpha to display the effect in a softened circle, could use a texture rather than calculations for the same task.
 	// Uses the second set of area texture coordinates, which range from (0,0) to (1,1) over the area being processed
-	float softEdge = 0.05f; // Softness of the edge of the circle - range 0.001 (hard edge) to 0.25 (very soft)
+	float softEdge = 0.2f; // Softness of the edge of the circle - range 0.001 (hard edge) to 0.25 (very soft)
 	float2 centreVector = ppIn.UVArea - float2(0.5f, 0.5f);
 	float centreLengthSq = dot(centreVector, centreVector);
 	float ppAlpha = 1.0f - saturate( (centreLengthSq - 0.25f + softEdge) / softEdge ); // Soft circle calculation based on fact that this circle has a radius of 0.5 (as area UVs go from 0->1)
@@ -289,7 +292,15 @@ float4 PPSpiralShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 	// Sample texture at new position (centre UV + rotated UV offset)
     float3 ppColour = SceneTexture.Sample( BilinearClamp, centreUV + rotOffsetUV );
 
-    return float4( ppColour, 1.0f );
+	// Calculate alpha to display the effect in a softened circle, could use a texture rather than calculations for the same task.
+	// Uses the second set of area texture coordinates, which range from (0,0) to (1,1) over the area being processed
+	float softEdge = 0.1f; // Softness of the edge of the circle - range 0.001 (hard edge) to 0.25 (very soft)
+	float2 centreVector = ppIn.UVArea - float2(0.5f, 0.5f);
+	float centreLengthSq = dot(centreVector, centreVector);
+	float ppAlpha = 1.0f - saturate((centreLengthSq - 0.25f + softEdge) / softEdge); // Soft circle calculation based on fact that this circle has a radius of 0.5 (as area UVs go from 0->1)
+
+
+    return float4( ppColour, ppAlpha );
 }
 
 

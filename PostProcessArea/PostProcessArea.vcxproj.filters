@@ -209,11 +209,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Entities.xml" />
-    <None Include="Source\Render\PostProcess.fx">
-      <Filter>Render</Filter>
-    </None>
     <None Include="Source\Render\Scene.fx">
       <Filter>Render</Filter>
     </None>
+    <None Include="Source\Render\PostProcess.fx" />
   </ItemGroup>
 </Project>

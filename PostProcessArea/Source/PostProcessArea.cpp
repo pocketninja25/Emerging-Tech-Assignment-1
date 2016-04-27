@@ -388,40 +388,61 @@ void UpdatePostProcesses( float updateTime )
 // the effect of the post-processing into the scene). Also requires the camera, since we are creating a camera facing quad.
 void SetPostProcessArea( CCamera* camera, CVector3 areaCentre, float width, float height, float depthOffset = 0.0f )
 {
-	//***TODO - Fill in each of the steps below. The process is similar to camera picking - creating a 2D rectangle based on a 3D point
-
 	// Turn areaCentre (a point in world space) into a CVector4. Then multiply it by the camera's view matrix to get the area centre in camera space.
 	// Put this result in a CVector4 variable called cameraSpaceCentre
-	//ADD CODE HERE
+	CVector4 cameraSpaceCentre = camera->GetViewMatrix().Transform(CVector4(areaCentre, 1));
 
 	// Subtract width/2 from cameraSpaceCentre's x coordinate. Then add height/2 from the y coordinate (y axis goes up). The resulting point is at the
 	// top left of a camera facing quad. We work in camera space because its axes are camera aligned so creating a camera facing quad is easy.
 	// Copy the resulting point into a new CVector4 variable called cameraTopLeft
-	//ADD CODE HERE
+	CVector4 cameraTopLeft = cameraSpaceCentre;
+	cameraTopLeft.x -= width / 2;
+	cameraTopLeft.y += height / 2;
 
 	// In a similar way caclulate a new CVector4 variable called cameraBottomRight. Be careful to add/subtract the correct amounts.
-	//ADD CODE HERE
+	CVector4 cameraBottomRight = cameraTopLeft;
+	cameraBottomRight.x += width;
+	cameraBottomRight.y -= height;
 
 	// Multiply both cameraTopLeft and cameraBottomRight by the camera's projection matrix and put the results in new CVector4 variables
 	// called projTopLeft and projBottomRight. This gives the projection space coordinates of the post process area
-	//ADD CODE HERE
+	CVector4 projTopLeft = camera->GetProjMatrix().Transform(cameraTopLeft);
+	CVector4 projBottomRight = camera->GetProjMatrix().Transform(cameraBottomRight);
 
 	// Divide the x & y coordinates of both projTopLeft and projTopLeft by the w coordinate. This is the perspective divide. We are doing
 	// this manually to create 2D coordinates in viewport space, ranging from -1.0 to 1.0 from left->right and bottom->top of the viewport.
 	// These coordinates will be used in the vertex shader to create both vertex and texture coordinates for the quad to render
-	//ADD CODE HERE
+	projTopLeft.x /= projTopLeft.w;
+	projTopLeft.y /= projTopLeft.w;
+
+	projBottomRight.x /= projBottomRight.w;
+	projBottomRight.y /= projBottomRight.w;
+
 
 	// Add the depthOffset variable to both the z and w coordinates of projTopLeft. No need to do projBottomRight, as it will be the same.
 	// Then divide the z coordinate by the w coordinate. This is the final part of the perspective divide to give the depth buffer value,
 	// but here tweaked with a depth offset. This method is an approximation but will work fine with typical camera settings
-	//ADD CODE HERE
+	projTopLeft.z += depthOffset;
+	projTopLeft.w += depthOffset;
+	projTopLeft.z /= projTopLeft.w;
 
 	// Negate the y coordinates of both projTopLeft and projTopLeft. The divide the x & y coordinates of both by 2.0f and add 0.5f.
 	// This converts the viewport coordinates (-1 to 1 range) into UV coordinates (0 to 1 range, y down). In fact, we will need the
 	// coordinates in both ranges (viewport coordinates for rendering the quad, UV coordinates for sampling the scene texture), but
 	// we do this conversion here as it helps some shaders to have the post-processing area in UV space (e.g. spiral needs to know
 	// the centre of the spiralling area in the scene texture)
-	//ADD CODE HERE
+	projTopLeft.y = -projTopLeft.y;
+	projBottomRight.y = -projBottomRight.y;
+
+	projTopLeft.x /= 2.0f;
+	projTopLeft.x += 0.5f;
+	projTopLeft.y /= 2.0f;
+	projTopLeft.y += 0.5f;
+
+	projBottomRight.x /= 2.0f;
+	projBottomRight.x += 0.5f;
+	projBottomRight.y /= 2.0f;
+	projBottomRight.y += 0.5f;
 
 	// Send the values calculated to the shader (this part is done). The post-processing vertex shader needs only these values to
 	// create the vertex buffer for the quad to render, we don't need to create a vertex buffer for post-processing at all.
@@ -519,13 +540,13 @@ void RenderScene()
 
 	// Set the area size, 20 units wide and high, 0 depth offset. This sets up a viewport space quad for the post-process to work on
 	// Note that the function needs the camera to turn the point into a camera facing rectangular area
-	SetPostProcessArea( MainCamera, CVector3(-20, 20, 0), 20, 20, 0 );
+	SetPostProcessArea( MainCamera, EntityManager.GetEntity("Cubey")->Position(), 20, 20, -9 );
 
 	// Select one of the post-processing techniques and render the area using it
-	SelectPostProcess( Tint ); // Make sure you also update the line below when you change the post-process method here!
+	SelectPostProcess( Burn ); // Make sure you also update the line below when you change the post-process method here!
 	g_pd3dDevice->IASetInputLayout( NULL );
 	g_pd3dDevice->IASetPrimitiveTopology( D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP );
-	PPTechniques[Tint]->GetPassByIndex(0)->Apply(0);
+	PPTechniques[Burn]->GetPassByIndex(0)->Apply(0);
 	g_pd3dDevice->Draw( 4, 0 );
 
 	//************************************************

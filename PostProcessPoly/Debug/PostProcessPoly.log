@@ -1,8 +1,9 @@
 ﻿  PostProcessPoly.cpp
-d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(43): warning C4305: 'initializing': truncation from 'double' to 'float'
-d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(330): warning C4244: 'argument': conversion from 'gen::TUInt32' to 'float', possible loss of data
-d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(331): warning C4244: 'argument': conversion from 'gen::TUInt32' to 'float', possible loss of data
-d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(436): warning C4244: '-=': conversion from 'double' to 'float', possible loss of data
-d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(442): warning C4305: '+=': truncation from 'double' to 'float'
+d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(37): warning C4305: 'initializing': truncation from 'double' to 'float'
+d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(381): warning C4244: 'argument': conversion from 'gen::TUInt32' to 'float', possible loss of data
+d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(382): warning C4244: 'argument': conversion from 'gen::TUInt32' to 'float', possible loss of data
+d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(487): warning C4244: '-=': conversion from 'double' to 'float', possible loss of data
+d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(493): warning C4305: '+=': truncation from 'double' to 'float'
+d:\users\daniel\documents\university\co3303 - emerging technologies for games\assignment 1 - post processing\postprocesspoly\source\postprocesspoly.cpp(702): warning C4018: '<': signed/unsigned mismatch
   PostProcessPoly.vcxproj -> D:\Users\Daniel\Documents\University\CO3303 - Emerging Technologies For Games\Assignment 1 - Post Processing\PostProcessPoly\Debug\PostProcessPoly.exe
           1 file(s) copied.

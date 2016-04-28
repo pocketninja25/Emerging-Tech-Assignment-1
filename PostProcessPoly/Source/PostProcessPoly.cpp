@@ -30,15 +30,9 @@ namespace gen
 // Post-process data
 //*****************************************************************************
 
-// Enumeration of different post-processes
-enum PostProcesses
-{
-	Copy, Tint, GreyNoise, Burn, Distort, Spiral, HeatHaze, GaussianBlur, Ripple, Shockwave,
-	NumPostProcesses
-};
 
-// Currently used post process
-PostProcesses FullScreenFilter = Copy;
+
+
 
 const float kPi = 3.1416;
 
@@ -59,18 +53,53 @@ float ShockwaveScale = 1.0f;
 // Separate effect file for full screen & area post-processes. Not necessary to use a separate file, but convenient given the architecture of this lab
 ID3D10Effect* PPEffect;
 
+// Enumeration of different post-processes
+enum PostProcesses
+{
+	Copy, Tint, GreyNoise, Burn, Distort, Spiral, HeatHaze, GaussianBlur, Ripple, Shockwave, Negative,
+	NumPostProcesses
+};
 // Technique name for each post-process
-const string PPTechniqueNames[NumPostProcesses] = {	"PPCopy", "PPTint", "PPGreyNoise", "PPBurn", "PPDistort", "PPSpiral", "PPHeatHaze", "PPGaussianBlur", "PPRipple", "PPShockwave" };
+const string PPTechniqueNames[NumPostProcesses] = {	"PPCopy", "PPTint", "PPGreyNoise", "PPBurn", "PPDistort", "PPSpiral", "PPHeatHaze", "PPGaussianBlur", "PPRipple", "PPShockwave", "PPNegative" };
 
 // Technique pointers for each post-process
 ID3D10EffectTechnique* PPTechniques[NumPostProcesses];
 
+// Currently used post process
+PostProcesses FullScreenFilter = Copy;
+vector<PostProcesses> FullScreenFilterList;
+
 
 // Will render the scene to a texture in a first pass, then copy that texture to the back buffer in a second post-processing pass
 // So need a texture and two "views": a render target view (to render into the texture - 1st pass) and a shader resource view (use the rendered texture as a normal texture - 2nd pass)
-ID3D10Texture2D* SceneTexture = NULL;
-ID3D10ShaderResourceView* SceneShaderResource = NULL;
-ID3D10RenderTargetView* SceneRenderTarget = NULL;
+struct Texture2D
+{
+	ID3D10Texture2D* Texture;
+	ID3D10ShaderResourceView* Resource;
+	ID3D10RenderTargetView* Target;
+
+	Texture2D()
+	{
+		Texture = NULL;
+		Resource = NULL;
+		Target = NULL;
+	}
+	
+	void SafeRelease()
+	{
+		if (Target) Target->Release();
+		if (Resource) Resource->Release();
+		if (Texture) Texture->Release();
+	}
+};
+
+Texture2D SceneTexture = Texture2D();
+Texture2D BufferTextureA = Texture2D();
+Texture2D BufferTextureB = Texture2D();
+Texture2D* WriteBuffer = &BufferTextureA;
+Texture2D* ReadBuffer = &BufferTextureB;
+
+
 
 // Additional textures used by post-processes
 ID3D10ShaderResourceView* NoiseMap = NULL;
@@ -176,6 +205,19 @@ CVector3 LightCentre( 0.0f, 30.0f, 50.0f );
 const float LightOrbit = 170.0f;
 const float LightOrbitSpeed = 0.2f;
 
+//-----------------------------------------------------------------------------
+// Buffer Chain Helper
+//-----------------------------------------------------------------------------
+void CycleReadWriteBuffers(bool ClearWriteBuffer)
+{
+	Texture2D* TempBuffer = WriteBuffer;
+	WriteBuffer = ReadBuffer;
+	ReadBuffer = TempBuffer;
+
+	if (ClearWriteBuffer)	g_pd3dDevice->ClearRenderTargetView(WriteBuffer->Target, &AmbientColour.r);
+
+}
+
 
 //-----------------------------------------------------------------------------
 // Scene management
@@ -246,11 +288,15 @@ bool PostProcessSetup()
 	textureDesc.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE; // Indicate we will use texture as render target, and pass it to shaders
 	textureDesc.CPUAccessFlags = 0;
 	textureDesc.MiscFlags = 0;
-	if (FAILED(g_pd3dDevice->CreateTexture2D( &textureDesc, NULL, &SceneTexture ))) return false;
+	if (FAILED(g_pd3dDevice->CreateTexture2D(&textureDesc, NULL, &SceneTexture.Texture))) return false;
+	if (FAILED(g_pd3dDevice->CreateTexture2D(&textureDesc, NULL, &BufferTextureA.Texture))) return false;
+	if (FAILED(g_pd3dDevice->CreateTexture2D( &textureDesc, NULL, &BufferTextureB.Texture ))) return false;
 
 
 	// Get a "view" of the texture as a render target - giving us an interface for rendering to the texture
-	if (FAILED(g_pd3dDevice->CreateRenderTargetView( SceneTexture, NULL, &SceneRenderTarget ))) return false;
+	if (FAILED(g_pd3dDevice->CreateRenderTargetView(SceneTexture.Texture, NULL, &SceneTexture.Target))) return false;
+	if (FAILED(g_pd3dDevice->CreateRenderTargetView(BufferTextureA.Texture, NULL, &BufferTextureA.Target))) return false;
+	if (FAILED(g_pd3dDevice->CreateRenderTargetView(BufferTextureB.Texture, NULL, &BufferTextureB.Target ))) return false;
 
 	// And get a shader-resource "view" - giving us an interface for passing the texture to shaders
 	D3D10_SHADER_RESOURCE_VIEW_DESC srDesc;
@@ -258,7 +304,9 @@ bool PostProcessSetup()
 	srDesc.ViewDimension = D3D10_SRV_DIMENSION_TEXTURE2D;
 	srDesc.Texture2D.MostDetailedMip = 0;
 	srDesc.Texture2D.MipLevels = 1;
-	if (FAILED(g_pd3dDevice->CreateShaderResourceView( SceneTexture, &srDesc, &SceneShaderResource ))) return false;
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(SceneTexture.Texture, &srDesc, &SceneTexture.Resource))) return false;
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(BufferTextureA.Texture, &srDesc, &BufferTextureA.Resource))) return false;
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(BufferTextureB.Texture, &srDesc, &BufferTextureB.Resource ))) return false;
 
 	// Load post-processing support textures
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, (MediaFolder + "Noise.png").c_str() ,   NULL, NULL, &NoiseMap,   NULL ) )) return false;
@@ -304,6 +352,8 @@ bool PostProcessSetup()
 	ShockwaveScaleVar	 = PPEffect->GetVariableByName( "ShockwaveScale")->AsScalar();
 	ShockwaveSinVar		 = PPEffect->GetVariableByName( "ShockwaveSin")->AsScalar();
 
+	FullScreenFilterList.push_back(Copy);
+
 	return true;
 }
 
@@ -313,9 +363,11 @@ void PostProcessShutdown()
 	if (DistortMap)          DistortMap->Release();
 	if (BurnMap)             BurnMap->Release();
 	if (NoiseMap)            NoiseMap->Release();
-	if (SceneShaderResource) SceneShaderResource->Release();
-	if (SceneRenderTarget)   SceneRenderTarget->Release();
-	if (SceneTexture)        SceneTexture->Release();
+
+	SceneTexture.SafeRelease();
+	BufferTextureA.SafeRelease();
+	BufferTextureB.SafeRelease();
+
 }
 //*****************************************************************************
 
@@ -621,22 +673,44 @@ void RenderScene()
 	g_pd3dDevice->RSSetViewports( 1, &vp );
 
 	g_pd3dDevice->ClearRenderTargetView(BackBufferRenderTarget, &AmbientColour.r);
+	g_pd3dDevice->ClearRenderTargetView(ReadBuffer->Target, &AmbientColour.r);
+	g_pd3dDevice->ClearRenderTargetView(WriteBuffer->Target, &AmbientColour.r);
+
+
+	//------------------------------------------------
+	//Render Base Scene onto WriteBuffer
+	RenderBaseScene(WriteBuffer->Target);
 	
+	
+	//-----------------------------------------------
+	//Make Read and write buffers have same information so that drawing polygons can effectively write to their own source information
+	CycleReadWriteBuffers(false);
+	RenderFullscreenPostProcess(Copy, WriteBuffer->Target, ReadBuffer->Resource);
+	
+	RenderPostProcessedPolygons(WriteBuffer->Target, ReadBuffer->Resource);
+	
+	//------------------------------------------------
+	//Make Read and write buffers have same information so that drawing AreaPostProcess can effectively write to its own source information
 
-	RenderBaseScene(SceneRenderTarget);
+	CycleReadWriteBuffers(false);
 
+	RenderFullscreenPostProcess(Copy, WriteBuffer->Target, ReadBuffer->Resource);
+
+	RenderAreaPostProcess(Spiral, WriteBuffer->Target, ReadBuffer->Resource, EntityManager.GetEntity("Cubey")->Position(), 20.0f, 20.0f, -9.0f);
+	
 	//------------------------------------------------
 
-	RenderFullscreenPostProcess(FullScreenFilter, BackBufferRenderTarget, SceneShaderResource);
+	for (int i = 0; i < FullScreenFilterList.size(); i++)
+	{
+		CycleReadWriteBuffers(true);
 
-	//------------------------------------------------
+		RenderFullscreenPostProcess(FullScreenFilterList[i], WriteBuffer->Target, ReadBuffer->Resource);
 
-	RenderPostProcessedPolygons(BackBufferRenderTarget, SceneShaderResource);
+	}
+		
+	CycleReadWriteBuffers(true);
 
-	//------------------------------------------------
-	RenderAreaPostProcess(Spiral, BackBufferRenderTarget, SceneShaderResource, EntityManager.GetEntity("Cubey")->Position(), 20.0f, 20.0f, -9.0f);
-
-	//------------------------------------------------
+	RenderFullscreenPostProcess(Copy, BackBufferRenderTarget, ReadBuffer->Resource);
 
 	// These two lines unbind the scene texture from the shader to stop DirectX issuing a warning when we try to render to it again next frame
 	SceneTextureVar->SetResource( 0 );
@@ -727,27 +801,30 @@ void UpdateScene(float updateTime)
 	if (KeyHit(Key_F5)) CameraMoveSpeed = 640.0f;
 
 	// Choose post-process
-	if (KeyHit(Key_1)) FullScreenFilter = Copy;
-	if (KeyHit(Key_2)) FullScreenFilter = Tint;
-	if (KeyHit(Key_3)) FullScreenFilter = GreyNoise;
-	if (KeyHit(Key_4)) FullScreenFilter = Burn;
-	if (KeyHit(Key_5)) FullScreenFilter = Distort;
-	if (KeyHit(Key_6)) FullScreenFilter = Spiral;
-	if (KeyHit(Key_7)) FullScreenFilter = HeatHaze;
-	if (KeyHit(Key_8)) FullScreenFilter = GaussianBlur;
+	if (KeyHit(Key_1)) FullScreenFilterList.push_back(Copy);
+	if (KeyHit(Key_2))  FullScreenFilterList.push_back(Tint);
+	if (KeyHit(Key_3))  FullScreenFilterList.push_back(GreyNoise);
+	if (KeyHit(Key_4))  FullScreenFilterList.push_back(Burn);
+	if (KeyHit(Key_5)) FullScreenFilterList.push_back(Distort);
+	if (KeyHit(Key_6))  FullScreenFilterList.push_back(Spiral);
+	if (KeyHit(Key_7))  FullScreenFilterList.push_back(HeatHaze);
+	if (KeyHit(Key_8))  FullScreenFilterList.push_back(GaussianBlur);
 	if (KeyHit(Key_9))
 	{
-		FullScreenFilter = Ripple;
+		FullScreenFilterList.push_back(Ripple);
 		RippleTime = 0.0f;
 		RipplePosition = MousePixel;
 	}
 	if (KeyHit(Key_0))
 	{
-		FullScreenFilter = Shockwave;
+		FullScreenFilterList.push_back(Shockwave);
 		ShockwaveSin = 0.0f;
 		ShockwaveScale = 1.0f;
 	}
-
+	if (KeyHit(Key_Back))
+	{
+		FullScreenFilterList.push_back(Negative);
+	}
 
 	// Rotate cube and attach light to it
 	CEntity* cubey = EntityManager.GetEntity( "Cubey" );

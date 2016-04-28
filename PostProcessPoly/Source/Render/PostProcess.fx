@@ -394,6 +394,16 @@ float4 PPShockwaveShader(PS_POSTPROCESS_INPUT ppIn) : SV_Target
 	return float4(ppColour, 1.0f);
 }
 
+float4 PPNegativeShader(PS_POSTPROCESS_INPUT ppIn) : SV_Target
+{
+    float3 ppColour = SceneTexture.Sample(PointClamp, ppIn.UVScene);
+    ppColour.r = 1.0f - ppColour.r;
+    ppColour.g = 1.0f - ppColour.g;
+    ppColour.b = 1.0f - ppColour.b;
+
+    return float4(ppColour, 1.0f);
+}
+
 float4 PPFeedbackShader(PS_POSTPROCESS_INPUT ppIn) : SV_Target
 {
 	float3 ppColour = float3(0.0f, 0.0f, 0.0f);
@@ -610,4 +620,18 @@ technique10 PPFeedback
 		SetRasterizerState(CullBack);
 		SetDepthStencilState(DepthWritesOff, 0);
 	}
+}
+
+technique10 PPNegative
+{
+    pass P0
+    {
+        SetVertexShader(CompileShader(vs_4_0, PPQuad()));
+        SetGeometryShader(NULL);
+        SetPixelShader(CompileShader(ps_4_0, PPNegativeShader()));
+		
+        SetBlendState(AlphaBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+        SetRasterizerState(CullBack);
+        SetDepthStencilState(DepthWritesOff, 0);
+    }
 }

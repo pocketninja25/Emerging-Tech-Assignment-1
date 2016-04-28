@@ -107,6 +107,9 @@
     </ClCompile>
     <ClCompile Include="Source\MainApp.cpp" />
     <ClCompile Include="Source\PostProcessPoly.cpp" />
+    <ClCompile Include="Source\Math\ColourConversion.cpp">
+      <Filter>Math</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\Scene\Camera.h">
@@ -206,14 +209,13 @@
       <Filter>Data</Filter>
     </ClInclude>
     <ClInclude Include="Source\PostProcessPoly.h" />
+    <ClInclude Include="Source\Math\ColourConversion.h">
+      <Filter>Math</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="Entities.xml" />
-    <None Include="Source\Render\PostProcess.fx">
-      <Filter>Render</Filter>
-    </None>
-    <None Include="Source\Render\Scene.fx">
-      <Filter>Render</Filter>
-    </None>
+    <None Include="Source\Render\PostProcess.fx" />
+    <None Include="Source\Render\Scene.fx" />
   </ItemGroup>
 </Project>

@@ -21,10 +21,19 @@ float  DistortLevel;
 float  BurnLevel;
 float  SpiralTimer;
 float  HeatHazeTimer;
+float  SceneTextureWidth;
+float  SceneTextureHeight;
+float  RippleTime;
+float2 RipplePosition;
+float  ShockwaveScale;
+float  ShockwaveSin;
 
 // Texture maps
 Texture2D SceneTexture;   // Texture containing the scene to copy to the full screen quad
 Texture2D PostProcessMap; // Second map for special purpose textures used during post-processing
+Texture2D PreviousSceneTexture;	//Texture containing the scene that was presented to the back buffer last frame
+Texture2D MultipassTexture;      //Texture for multipass methods to write to
+Texture2D FeedbackTexture;  //Texture containing last frames scene - for blur
 
 // Samplers to use with the above texture maps. Specifies texture filtering and addressing mode to use when accessing texture pixels
 // Usually use point sampling for the scene texture (i.e. no bilinear/trilinear blending) since don't want to blur it in the copy process
@@ -34,6 +43,14 @@ SamplerState PointClamp
     AddressU = Clamp;
     AddressV = Clamp;
 	MaxLOD = 0.0f;
+};
+
+SamplerState PointBorder
+{
+    Filter = MIN_MAG_MIP_POINT;
+    AddressU = Border;
+    AddressV = Border;
+    MaxLOD = 0.0f;
 };
 
 // See comment above. However, screen distortions may benefit slightly from bilinear filtering (not tri-linear because we won't create mip-maps for the scene each frame)
@@ -58,7 +75,6 @@ SamplerState TrilinearWrap
     AddressU = Wrap;
     AddressV = Wrap;
 };
-
 
 //--------------------------------------------------------------------------------------
 // Structures
@@ -309,6 +325,83 @@ float4 PPHeatHazeShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 	return float4( ppColour, ppAlpha );
 }
 
+// Gaussian Blur effect
+float4 PPGaussianBlurShader1(PS_POSTPROCESS_INPUT ppIn) : SV_Target
+{
+	float baseOffset = 0.005f; //The offset each sample 
+	float2 offset = float2(baseOffset, baseOffset * SceneTextureHeight/SceneTextureWidth);	//Make the blur offset proportional to the scene texture size	
+	
+	//Sample the base colour
+    float3 ppColour = SceneTexture.Sample(BilinearClamp, ppIn.UVScene) * 0.2f;
+
+    float3 FragmentColor = float3(0.0f, 0.0f, 0.0f);
+
+	//Merge with 15 samples in each direction (60 sample blur altogether)
+    for (int i = 1; i < 15; i++) {
+		//Use 0.2^i to simulate bell curve distribution of gaussian
+        // Horizontal-pass
+        FragmentColor +=
+            SceneTexture.Sample(BilinearClamp, ppIn.UVScene + float2(0.0f, offset.x * i))*pow(0.2f,i) +
+            SceneTexture.Sample(BilinearClamp, ppIn.UVScene - float2(0.0f, offset.x * i))*pow(0.2f,i);      
+
+		// Vertical-pass																  	  
+		FragmentColor +=																	  
+			SceneTexture.Sample(BilinearClamp, ppIn.UVScene + float2(offset.y * i, 0.0f))*pow(0.2f, i) +
+			SceneTexture.Sample(BilinearClamp, ppIn.UVScene - float2(offset.y * i, 0.0f))*pow(0.2f, i);
+		
+	}
+	//Add blur colour to base colour
+	ppColour += FragmentColor;    
+
+	return float4(ppColour, 1.0f);
+
+}
+
+float4 PPRippleShader(PS_POSTPROCESS_INPUT ppIn) : SV_Target
+{
+	float3 ppColour = float3(0.0f, 0.0f, 0.0f);
+
+	float2 shockCentre = float2(RipplePosition.x / SceneTextureWidth, RipplePosition.y / SceneTextureHeight);	//The origin of the shock (in UV space)
+	float distanceToCentre = length(ppIn.UVScene - shockCentre);	//Distance from texel to shock origin
+
+	float2 sampleCoord = ppIn.UVScene;	// The coordinate to sample
+	float3 shockParams = float3(0.1f, 0.1f, 0.05f);	//Parameters that change how the shock works //Z = shock time
+	
+	//If the pixel is within the Ripple
+	if ((distanceToCentre <= (RippleTime + shockParams.z)) && (distanceToCentre >= (RippleTime - shockParams.z)))
+	{
+		float diff = (distanceToCentre - RippleTime);	//How far into the Ripple is this pixel
+		float powDiff = 1.0 - pow(abs(diff*shockParams.x), shockParams.y);
+		float diffTime = diff  * powDiff;
+		float2 diffUV = normalize(ppIn.UVScene - shockCentre);
+		sampleCoord = ppIn.UVScene + (diffUV * diffTime);	//Set alternate sample coordinate 
+	}
+
+	ppColour = SceneTexture.Sample( PointClamp, sampleCoord );
+	return float4(ppColour, 1.0f);
+}
+
+float4 PPShockwaveShader(PS_POSTPROCESS_INPUT ppIn) : SV_Target
+{
+	float3 ppColour = float3(0.0f, 0.0f, 0.0f);
+
+	float2 finalUV = ppIn.UVScene;
+	finalUV.x += ShockwaveSin;
+	finalUV.y += ShockwaveSin * (SceneTextureHeight / SceneTextureWidth);
+
+	ppColour = SceneTexture.Sample(PointBorder, finalUV);
+
+	return float4(ppColour, 1.0f);
+}
+
+float4 PPFeedbackShader(PS_POSTPROCESS_INPUT ppIn) : SV_Target
+{
+	float3 ppColour = float3(0.0f, 0.0f, 0.0f);
+
+
+	return float4(ppColour, 1.0f);
+}
+
 
 //--------------------------------------------------------------------------------------
 // States
@@ -458,4 +551,63 @@ technique10 PPHeatHaze
 		SetRasterizerState( CullBack ); 
 		SetDepthStencilState( DepthWritesOff, 0 );
      }
+}
+
+// Gaussian Blur
+technique10 PPGaussianBlur
+{
+	pass P0
+	{
+		SetVertexShader(CompileShader(vs_4_0, PPQuad()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, PPGaussianBlurShader1()));
+	
+		SetBlendState(AlphaBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+		SetRasterizerState(CullBack);
+		SetDepthStencilState(DepthWritesOff, 0);
+	}
+}
+
+// Ripple
+technique10 PPRipple
+{
+	pass P0
+	{
+		SetVertexShader(CompileShader(vs_4_0, PPQuad()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, PPRippleShader()));
+
+		SetBlendState(AlphaBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+		SetRasterizerState(CullBack);
+		SetDepthStencilState(DepthWritesOff, 0);
+	}
+}
+
+// Shockwave
+technique10 PPShockwave
+{
+	pass P0
+	{
+		SetVertexShader(CompileShader(vs_4_0, PPQuad()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, PPShockwaveShader()));
+
+		SetBlendState(AlphaBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+		SetRasterizerState(CullBack);
+		SetDepthStencilState(DepthWritesOff, 0);
+	}
+}
+
+technique10 PPFeedback
+{
+	pass P0
+	{
+		SetVertexShader(CompileShader(vs_4_0, PPQuad()));
+		SetGeometryShader(NULL);
+		SetPixelShader(CompileShader(ps_4_0, PPFeedbackShader()));
+		
+		SetBlendState(AlphaBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+		SetRasterizerState(CullBack);
+		SetDepthStencilState(DepthWritesOff, 0);
+	}
 }

@@ -99,6 +99,7 @@ SRenderMethod RenderMethods[NumRenderMethods] =
 	"NormalMapping",   RM_NormalMapping,        2,         true,       false,          0,                // NormalMap       
 	"ParallaxMapping", RM_ParallaxMapping,      2,         true,       false,          0,                // ParallaxMap       
 	"PPTintPoly",      RM_TransformColour,      0,         false,      true,           0,                // PPTint       
+	"PPCutGlassPoly",  RM_ParallaxMapping,		2,		   true,	   true,		   0,				 // PPCutGlass
 };
 
 

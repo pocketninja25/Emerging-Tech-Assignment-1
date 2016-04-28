@@ -136,7 +136,7 @@ Mesh single_mesh_object {
   0,
   0;
 
-  Material Tint {
+  Material CutGlass {
    1.000000;0.500000;0.500000;1.000000;;
    32.000000;
    2.000000;2.000000;2.000000;;

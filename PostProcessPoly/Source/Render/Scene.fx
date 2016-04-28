@@ -705,11 +705,14 @@ float4 PPTintShader( VS_BASIC_OUTPUT vOut ) : SV_Target
 	// this screen coordinate (0->width, 0->height) into a UV coordinate (0->1, 0->1) is divide by the viewport width and height. Those values are 
 	// available as variables at the top of this file.
 	//
-	//***TODO - Create a float2 called UVScene that contains the UV coordinates of this pixel (simple, following the comment above).
+	//Convert pixel space to UV space
+	float2 UVScene = float2(vOut.ProjPos.x / ViewportWidth, vOut.ProjPos.y / ViewportHeight);
+		
+	//Sample Scene colour and tint it with the diffuse colour from the rendered object
+	float3 colour = SceneTexture.Sample(TrilinearWrap, UVScene.xy ) * DiffuseColour;
 
-	//***TODO - Sample the texture colour at the location UVSCene and multiply it by DiffuseColour (the colour of the material extracted from the .X file, variable already set up)
-
-	//***TODO - Return a float4 containing the tinted colour in rgb and 1.0 in alpha
+	//Return colour
+	return float4(colour, 1.0f);
 }
 
 
@@ -794,8 +797,7 @@ float4 PPCutGlassShader( VS_NORMALMAP_OUTPUT vOut ) : SV_Target
 	// Get scene texture colour (with distortion) to blend with the cut glass texture
 
 	//***TODO - Fill in the float2 UVScene with the UV coordinates of this pixel (same as start part of Tint code you filled in above)
-	float2 sceneUV = 0; // Not 0, fill in the correct values
-	//...
+	float2 sceneUV = float2(vOut.ProjPos.x / ViewportWidth, vOut.ProjPos.y / ViewportHeight);
 
 	// Offset UVs in scene texture to emulate refraction. Transform surface normal (from normal mapping) into camera space,
 	// and use this as a direction to offset UV calculated above. This is just a simple effect - not correct refraction
@@ -822,7 +824,7 @@ float4 PPCutGlassShader( VS_NORMALMAP_OUTPUT vOut ) : SV_Target
 	
 	////////////////////
 	// Combine colours 
-
+	
 	// Combine various textures (scene, diffuse and specular) together with lighting to get final pixel colour
 	float3 ppColour = lerp( diffuseMaterial, sceneColour, diffuseTex.a ) * diffuseLight + specularMaterial * specularLight;
 

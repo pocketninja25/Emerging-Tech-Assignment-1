@@ -21,6 +21,7 @@ using namespace std;
 #include "Messenger.h"
 #include "CParseLevel.h"
 #include "PostProcessPoly.h"
+#include "ColourConversion.h"
 
 namespace gen
 {
@@ -32,12 +33,14 @@ namespace gen
 // Enumeration of different post-processes
 enum PostProcesses
 {
-	Copy, Tint, GreyNoise, Burn, Distort, Spiral, HeatHaze,
+	Copy, Tint, GreyNoise, Burn, Distort, Spiral, HeatHaze, GaussianBlur, Ripple, Shockwave,
 	NumPostProcesses
 };
 
 // Currently used post process
 PostProcesses FullScreenFilter = Copy;
+
+const float kPi = 3.1416;
 
 // Post-process settings
 float BurnLevel = 0.0f;
@@ -46,13 +49,18 @@ float SpiralTimer = 0.0f;
 const float SpiralSpeed = 1.0f;
 float HeatHazeTimer = 0.0f;
 const float HeatHazeSpeed = 1.0f;
-
+D3DXVECTOR3 TintColourHSL = D3DXVECTOR3(0.0f, 1.0f, 0.5f);
+const float TintHueSpeed = 0.1f;
+float RippleTime = 0.0f;
+CVector2 RipplePosition = CVector2(0.0f, 0.0f);
+float ShockwaveSin = 0.0f;
+float ShockwaveScale = 1.0f;
 
 // Separate effect file for full screen & area post-processes. Not necessary to use a separate file, but convenient given the architecture of this lab
 ID3D10Effect* PPEffect;
 
 // Technique name for each post-process
-const string PPTechniqueNames[NumPostProcesses] = {	"PPCopy", "PPTint", "PPGreyNoise", "PPBurn", "PPDistort", "PPSpiral", "PPHeatHaze" };
+const string PPTechniqueNames[NumPostProcesses] = {	"PPCopy", "PPTint", "PPGreyNoise", "PPBurn", "PPDistort", "PPSpiral", "PPHeatHaze", "PPGaussianBlur", "PPRipple", "PPShockwave" };
 
 // Technique pointers for each post-process
 ID3D10EffectTechnique* PPTechniques[NumPostProcesses];
@@ -60,9 +68,9 @@ ID3D10EffectTechnique* PPTechniques[NumPostProcesses];
 
 // Will render the scene to a texture in a first pass, then copy that texture to the back buffer in a second post-processing pass
 // So need a texture and two "views": a render target view (to render into the texture - 1st pass) and a shader resource view (use the rendered texture as a normal texture - 2nd pass)
-ID3D10Texture2D*          SceneTexture = NULL;
-ID3D10RenderTargetView*   SceneRenderTarget = NULL;
+ID3D10Texture2D* SceneTexture = NULL;
 ID3D10ShaderResourceView* SceneShaderResource = NULL;
+ID3D10RenderTargetView* SceneRenderTarget = NULL;
 
 // Additional textures used by post-processes
 ID3D10ShaderResourceView* NoiseMap = NULL;
@@ -72,6 +80,7 @@ ID3D10ShaderResourceView* DistortMap = NULL;
 // Variables to link C++ post-process textures to HLSL shader variables (for area / full-screen post-processing)
 ID3D10EffectShaderResourceVariable* SceneTextureVar = NULL;
 ID3D10EffectShaderResourceVariable* PostProcessMapVar = NULL; // Single shader variable used for the three maps above (noise, burn, distort). Only one is needed at a time
+
 
 // Variables specifying the area used for post-processing
 ID3D10EffectVectorVariable* PPAreaTopLeftVar = NULL;
@@ -86,7 +95,12 @@ ID3D10EffectScalarVariable* DistortLevelVar = NULL;
 ID3D10EffectScalarVariable* BurnLevelVar = NULL;
 ID3D10EffectScalarVariable* SpiralTimerVar = NULL;
 ID3D10EffectScalarVariable* HeatHazeTimerVar = NULL;
-
+ID3D10EffectScalarVariable* SceneWidthVar = NULL;
+ID3D10EffectScalarVariable* SceneHeightVar = NULL;
+ID3D10EffectScalarVariable* RippleTimeVar = NULL;
+ID3D10EffectVectorVariable* RipplePositionVar = NULL;
+ID3D10EffectScalarVariable* ShockwaveScaleVar = NULL;
+ID3D10EffectScalarVariable* ShockwaveSinVar = NULL;
 
 //*****************************************************************************
 
@@ -126,6 +140,7 @@ extern TUInt32 BackBufferHeight;
 // Current mouse position
 extern TUInt32 MouseX;
 extern TUInt32 MouseY;
+extern CVector2 MousePixel;
 
 // Messenger class for sending messages to and between entities
 extern CMessenger Messenger;
@@ -180,10 +195,10 @@ bool SceneSetup()
 	MainCamera->SetNearFarClip( 2.0f, 300000.0f ); 
 
 	// Sunlight
-	Lights[0] = new CLight( CVector3( -10000.0f, 6000.0f, 0000.0f), SColourRGBA(1.0f, 0.8f, 0.6f) * 12000, 20000.0f ); // Colour is multiplied by light brightness
+	Lights[0] = new CLight(CVector3(-10000.0f, 6000.0f, 0000.0f), SColourRGBA(1.0f, 0.8f, 0.6f) * 12000, 20000.0f); // Colour is multiplied by light brightness
 
 	// Light orbiting area
-	Lights[1] = new CLight( LightCentre, SColourRGBA(0.0f, 0.2f, 1.0f) * 50, 100.0f );
+	Lights[1] = new CLight(LightCentre, SColourRGBA(0.0f, 0.2f, 1.0f) * 50, 100.0f);
 
 	return true;
 }
@@ -217,6 +232,7 @@ void SceneShutdown()
 // Prepare resources required for the post-processing pass
 bool PostProcessSetup()
 {
+
 	// Create the "scene texture" - the texture into which the scene will be rendered in the first pass
 	D3D10_TEXTURE2D_DESC textureDesc;
 	textureDesc.Width  = BackBufferWidth;  // Match views to viewport size
@@ -232,6 +248,7 @@ bool PostProcessSetup()
 	textureDesc.MiscFlags = 0;
 	if (FAILED(g_pd3dDevice->CreateTexture2D( &textureDesc, NULL, &SceneTexture ))) return false;
 
+
 	// Get a "view" of the texture as a render target - giving us an interface for rendering to the texture
 	if (FAILED(g_pd3dDevice->CreateRenderTargetView( SceneTexture, NULL, &SceneRenderTarget ))) return false;
 
@@ -242,7 +259,7 @@ bool PostProcessSetup()
 	srDesc.Texture2D.MostDetailedMip = 0;
 	srDesc.Texture2D.MipLevels = 1;
 	if (FAILED(g_pd3dDevice->CreateShaderResourceView( SceneTexture, &srDesc, &SceneShaderResource ))) return false;
-	
+
 	// Load post-processing support textures
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, (MediaFolder + "Noise.png").c_str() ,   NULL, NULL, &NoiseMap,   NULL ) )) return false;
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, (MediaFolder + "Burn.png").c_str() ,    NULL, NULL, &BurnMap,    NULL ) )) return false;
@@ -280,6 +297,12 @@ bool PostProcessSetup()
 	BurnLevelVar         = PPEffect->GetVariableByName( "BurnLevel" )->AsScalar();
 	SpiralTimerVar       = PPEffect->GetVariableByName( "SpiralTimer" )->AsScalar();
 	HeatHazeTimerVar     = PPEffect->GetVariableByName( "HeatHazeTimer" )->AsScalar();
+	SceneWidthVar		 = PPEffect->GetVariableByName( "SceneTextureWidth")->AsScalar();
+	SceneHeightVar		 = PPEffect->GetVariableByName( "SceneTextureHeight")->AsScalar();
+	RippleTimeVar		 = PPEffect->GetVariableByName( "RippleTime" )->AsScalar();
+	RipplePositionVar	 = PPEffect->GetVariableByName( "RipplePosition" )->AsVector();
+	ShockwaveScaleVar	 = PPEffect->GetVariableByName( "ShockwaveScale")->AsScalar();
+	ShockwaveSinVar		 = PPEffect->GetVariableByName( "ShockwaveSin")->AsScalar();
 
 	return true;
 }
@@ -287,14 +310,13 @@ bool PostProcessSetup()
 void PostProcessShutdown()
 {
 	if (PPEffect)            PPEffect->Release();
-    if (DistortMap)          DistortMap->Release();
-    if (BurnMap)             BurnMap->Release();
-    if (NoiseMap)            NoiseMap->Release();
+	if (DistortMap)          DistortMap->Release();
+	if (BurnMap)             BurnMap->Release();
+	if (NoiseMap)            NoiseMap->Release();
 	if (SceneShaderResource) SceneShaderResource->Release();
 	if (SceneRenderTarget)   SceneRenderTarget->Release();
 	if (SceneTexture)        SceneTexture->Release();
 }
-
 //*****************************************************************************
 
 
@@ -305,12 +327,19 @@ void PostProcessShutdown()
 // Set up shaders for given post-processing filter (used for full screen and area processing)
 void SelectPostProcess( PostProcesses filter )
 {
+	SceneHeightVar->SetFloat(BackBufferHeight);
+	SceneWidthVar->SetFloat(BackBufferWidth);
+
 	switch (filter)
 	{
 		case Tint:
 		{
+			D3DXCOLOR TintColour = D3DXCOLOR(1.0f, 0.0f, 0.0f, 1.0f);
+
+			HSLToRGB(TintColourHSL.x, TintColourHSL.y, TintColourHSL.z, TintColour.r, TintColour.g, TintColour.b);
+
 			// Set the colour used to tint the scene
-			D3DXCOLOR TintColour = D3DXCOLOR(1.0f,0.0f,0.0f,1.0f);
+			
 			TintColourVar->SetRawValue( &TintColour, 0, 12 );
 		}
 		break;
@@ -329,8 +358,8 @@ void SelectPostProcess( PostProcesses filter )
 
 			// Set noise texture
 			PostProcessMapVar->SetResource( NoiseMap );
-		}
 		break;
+		}
 
 		case Burn:
 		{
@@ -339,8 +368,8 @@ void SelectPostProcess( PostProcesses filter )
 
 			// Set burn texture
 			PostProcessMapVar->SetResource( BurnMap );
-		}
 		break;
+		}
 
 		case Distort:
 		{
@@ -350,8 +379,8 @@ void SelectPostProcess( PostProcesses filter )
 
 			// Set distort texture
 			PostProcessMapVar->SetResource( DistortMap );
-		}
 		break;
+		}
 
 		case Spiral:
 		{
@@ -366,6 +395,27 @@ void SelectPostProcess( PostProcesses filter )
 			HeatHazeTimerVar->SetFloat( HeatHazeTimer );
 			break;
 		}
+
+		case GaussianBlur:
+		{
+			break;
+		}
+
+		case Ripple:
+		{
+			RippleTimeVar->SetFloat(RippleTime);
+			
+			RipplePositionVar->SetRawValue(&RipplePosition, 0, 8);
+			break;
+		}
+
+		case Shockwave:
+		{
+			float foo = Sin(ShockwaveSin);
+			ShockwaveSinVar->SetFloat( Sin(ShockwaveSin) * ShockwaveScale );
+			ShockwaveScaleVar->SetFloat(ShockwaveScale);
+			break;
+		}
 	}
 }
 
@@ -376,6 +426,21 @@ void UpdatePostProcesses( float updateTime )
 	BurnLevel = Mod( BurnLevel + BurnSpeed * updateTime, 1.0f );
 	SpiralTimer   += SpiralSpeed * updateTime;
 	HeatHazeTimer += HeatHazeSpeed * updateTime;
+	TintColourHSL.x += TintHueSpeed * updateTime;
+	if (TintColourHSL.x > 1.0f)
+		TintColourHSL.x -= 1.0f;
+	RippleTime += updateTime;
+
+	if (ShockwaveScale > 0)
+	{
+		ShockwaveScale -= updateTime * 1.5;
+	}
+	else
+	{
+		ShockwaveScale = 0.0f;
+	}
+	ShockwaveSin += 0.20;
+
 }
 
 
@@ -444,6 +509,104 @@ void SetFullScreenPostProcessArea()
 // Game loop functions
 //-----------------------------------------------------------------------------
 
+void RenderBaseScene(ID3D10RenderTargetView* renderTarget)
+{
+	//------------------------------------------------
+	// SCENE RENDER PASS - rendering to a texture
+
+	// Specify that we will render to the scene texture in this first pass (rather than the backbuffer), will share the depth/stencil buffer with the backbuffer though
+	g_pd3dDevice->OMSetRenderTargets(1, &renderTarget, DepthStencilView);
+
+	// Clear the texture and the depth buffer
+	g_pd3dDevice->ClearRenderTargetView(renderTarget, &AmbientColour.r);
+	g_pd3dDevice->ClearDepthStencilView(DepthStencilView, D3D10_CLEAR_DEPTH, 1.0f, 0);
+
+	// Prepare camera
+	MainCamera->SetAspect(static_cast<TFloat32>(BackBufferWidth) / BackBufferHeight);
+	MainCamera->CalculateMatrices();
+	MainCamera->CalculateFrustrumPlanes();
+
+	// Set camera and light data in shaders
+	SetCamera(MainCamera);
+	SetAmbientLight(AmbientColour);
+	SetLights(&Lights[0]);
+
+	// Render entities
+	EntityManager.RenderAllEntities(MainCamera);
+
+}
+
+void RenderFullscreenPostProcess(PostProcesses filter, ID3D10RenderTargetView* renderTarget, ID3D10ShaderResourceView* shaderResource)
+{
+	//------------------------------------------------
+	// FULL SCREEN POST PROCESS RENDER PASS - Render full screen quad on the back-buffer mapped with the scene texture, with post-processing
+
+	// Select the back buffer to use for rendering (will ignore depth-buffer for full-screen quad) and select scene texture for use in shader
+	g_pd3dDevice->OMSetRenderTargets(1, &renderTarget, DepthStencilView); // No need to clear the back-buffer, we're going to overwrite it all
+	SceneTextureVar->SetResource(shaderResource);
+
+	// Prepare shader settings for the current full screen filter
+	SelectPostProcess(filter);
+	SetFullScreenPostProcessArea(); // Define the full-screen as the area to affect
+
+									// Using special vertex shader than creates its own data for a full screen quad (see .fx file). No need to set vertex/index buffer, just draw 4 vertices of quad
+									// Select technique to match currently selected post-process
+	g_pd3dDevice->IASetInputLayout(NULL);
+	g_pd3dDevice->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+	PPTechniques[filter]->GetPassByIndex(0)->Apply(0);
+
+
+	g_pd3dDevice->Draw(4, 0);
+
+	//------------------------------------------------
+}
+
+void RenderPostProcessedPolygons(ID3D10RenderTargetView* renderTarget, ID3D10ShaderResourceView* shaderResource)
+{
+	g_pd3dDevice->OMSetRenderTargets(1, &renderTarget, DepthStencilView); // No need to clear the back-buffer, we're going to overwrite it all
+
+	//**|PPPOLY|***************************************
+	// POLY POST PROCESS RENDER PASS
+	// The scene has been rendered in full into a texture then copied to the back-buffer. However, the post-processed polygons were missed out. Now render the entities
+	// again, but only the post-processed materials. These are rendered to the back-buffer in the correct places in the scene, but most importantly their shaders will
+	// have the scene texture available to them. So these polygons can distort or affect the scene behind them (e.g. distortion through cut glass). Note that this also
+	// means we can do blending (additive, multiplicative etc.) in the shader. The post-processed materials are identified with a boolean (RenderMethod.cpp). This entire
+	// approach works even better with "bucket" rendering, where post-process shaders are held in a separate bucket - making it unnecessary to "RenderAllEntities" as 
+	// we are doing here.
+
+	/// NOTE: Post-processing - need to set the back buffer as a render target. Relying on the fact that the section above already did that
+	// Polygon post-processing occurs in the scene rendering code (RenderMethod.cpp) - so pass over the scene texture and viewport dimensions for the scene post-processing materials/shaders
+	SetSceneTexture(shaderResource, BackBufferWidth, BackBufferHeight);
+
+	// Render all entities again, but flag that we only want the post-processed polygons
+	EntityManager.RenderAllEntities(MainCamera, true);
+
+	//************************************************
+}
+
+void RenderAreaPostProcess( PostProcesses postProcess, ID3D10RenderTargetView* renderTarget, ID3D10ShaderResourceView* shaderResource, CVector3 targetPosition, float width, float height, float depthOffset)
+{
+	g_pd3dDevice->OMSetRenderTargets(1, &renderTarget, DepthStencilView); // No need to clear the back-buffer, we're going to overwrite it all
+	SceneTextureVar->SetResource(shaderResource);
+
+	// AREA POST PROCESS RENDER PASS - Render smaller quad on the back-buffer mapped with a matching area of the scene texture, with different post-processing
+
+	// NOTE: Post-processing - need to render to the back buffer and select scene texture for use in shader. Relying on the fact that the section above already did that
+
+	// Will have post-processed area over the moving cube
+
+	// Set the area size, 20 units wide and high, 0 depth offset. This sets up a viewport space quad for the post-process to work on
+	// Note that the function needs the camera to turn the cube's point into a camera facing rectangular area
+	SetPostProcessArea(MainCamera, targetPosition, width, height, -9);
+
+	// Select one of the post-processing techniques and render the area using it
+	SelectPostProcess(postProcess); // Make sure you also update the line below when you change the post-process method here!
+	g_pd3dDevice->IASetInputLayout(NULL);
+	g_pd3dDevice->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+	PPTechniques[postProcess]->GetPassByIndex(0)->Apply(0);
+	g_pd3dDevice->Draw(4, 0);
+}
+
 // Draw one frame of the scene
 void RenderScene()
 {
@@ -457,91 +620,21 @@ void RenderScene()
 	vp.TopLeftY = 0;
 	g_pd3dDevice->RSSetViewports( 1, &vp );
 
+	g_pd3dDevice->ClearRenderTargetView(BackBufferRenderTarget, &AmbientColour.r);
+	
 
-	//------------------------------------------------
-	// SCENE RENDER PASS - rendering to a texture
-
-	// Specify that we will render to the scene texture in this first pass (rather than the backbuffer), will share the depth/stencil buffer with the backbuffer though
-	g_pd3dDevice->OMSetRenderTargets( 1, &SceneRenderTarget, DepthStencilView );
-
-	// Clear the texture and the depth buffer
-	g_pd3dDevice->ClearRenderTargetView( SceneRenderTarget, &AmbientColour.r );
-	g_pd3dDevice->ClearDepthStencilView( DepthStencilView, D3D10_CLEAR_DEPTH, 1.0f, 0 );
-
-	// Prepare camera
-	MainCamera->SetAspect( static_cast<TFloat32>(BackBufferWidth) / BackBufferHeight );
-	MainCamera->CalculateMatrices();
-	MainCamera->CalculateFrustrumPlanes();
-
-	// Set camera and light data in shaders
-	SetCamera( MainCamera );
-	SetAmbientLight( AmbientColour );
-	SetLights( &Lights[0] );
-
-	// Render entities
-	EntityManager.RenderAllEntities( MainCamera );
+	RenderBaseScene(SceneRenderTarget);
 
 	//------------------------------------------------
 
-
-	//------------------------------------------------
-	// FULL SCREEN POST PROCESS RENDER PASS - Render full screen quad on the back-buffer mapped with the scene texture, with post-processing
-
-	// Select the back buffer to use for rendering (will ignore depth-buffer for full-screen quad) and select scene texture for use in shader
-	g_pd3dDevice->OMSetRenderTargets( 1, &BackBufferRenderTarget, DepthStencilView ); // No need to clear the back-buffer, we're going to overwrite it all
-	SceneTextureVar->SetResource( SceneShaderResource );
-
-	// Prepare shader settings for the current full screen filter
-	SelectPostProcess( FullScreenFilter );
-	SetFullScreenPostProcessArea(); // Define the full-screen as the area to affect
-
-	// Using special vertex shader than creates its own data for a full screen quad (see .fx file). No need to set vertex/index buffer, just draw 4 vertices of quad
-	// Select technique to match currently selected post-process
-	g_pd3dDevice->IASetInputLayout( NULL );
-	g_pd3dDevice->IASetPrimitiveTopology( D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP );
-	PPTechniques[FullScreenFilter]->GetPassByIndex(0)->Apply(0);
-	g_pd3dDevice->Draw( 4, 0 );
+	RenderFullscreenPostProcess(FullScreenFilter, BackBufferRenderTarget, SceneShaderResource);
 
 	//------------------------------------------------
 
-
-	//**|PPPOLY|***************************************
-	// POLY POST PROCESS RENDER PASS
-	// The scene has been rendered in full into a texture then copied to the back-buffer. However, the post-processed polygons were missed out. Now render the entities
-	// again, but only the post-processed materials. These are rendered to the back-buffer in the correct places in the scene, but most importantly their shaders will
-	// have the scene texture available to them. So these polygons can distort or affect the scene behind them (e.g. distortion through cut glass). Note that this also
-	// means we can do blending (additive, multiplicative etc.) in the shader. The post-processed materials are identified with a boolean (RenderMethod.cpp). This entire
-	// approach works even better with "bucket" rendering, where post-process shaders are held in a separate bucket - making it unnecessary to "RenderAllEntities" as 
-	// we are doing here.
-
-	// NOTE: Post-processing - need to set the back buffer as a render target. Relying on the fact that the section above already did that
-	// Polygon post-processing occurs in the scene rendering code (RenderMethod.cpp) - so pass over the scene texture and viewport dimensions for the scene post-processing materials/shaders
-	SetSceneTexture( SceneShaderResource, BackBufferWidth, BackBufferHeight );
-
-	// Render all entities again, but flag that we only want the post-processed polygons
-	EntityManager.RenderAllEntities( MainCamera, true );
-
-	//************************************************
-
+	RenderPostProcessedPolygons(BackBufferRenderTarget, SceneShaderResource);
 
 	//------------------------------------------------
-	// AREA POST PROCESS RENDER PASS - Render smaller quad on the back-buffer mapped with a matching area of the scene texture, with different post-processing
-
-	// NOTE: Post-processing - need to render to the back buffer and select scene texture for use in shader. Relying on the fact that the section above already did that
-
-	// Will have post-processed area over the moving cube
-	CEntity* cubey = EntityManager.GetEntity( "Cubey" );
-
-	// Set the area size, 20 units wide and high, 0 depth offset. This sets up a viewport space quad for the post-process to work on
-	// Note that the function needs the camera to turn the cube's point into a camera facing rectangular area
-	SetPostProcessArea( MainCamera, cubey->Position(), 20, 20, -9 );
-
-	// Select one of the post-processing techniques and render the area using it
-	SelectPostProcess( Spiral ); // Make sure you also update the line below when you change the post-process method here!
-	g_pd3dDevice->IASetInputLayout( NULL );
-	g_pd3dDevice->IASetPrimitiveTopology( D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP );
-	PPTechniques[Spiral]->GetPassByIndex(0)->Apply(0);
-	g_pd3dDevice->Draw( 4, 0 );
+	RenderAreaPostProcess(Spiral, BackBufferRenderTarget, SceneShaderResource, EntityManager.GetEntity("Cubey")->Position(), 20.0f, 20.0f, -9.0f);
 
 	//------------------------------------------------
 
@@ -551,25 +644,25 @@ void RenderScene()
 
 	// Render UI elements last - don't want them post-processed
 	RenderSceneText();
-
+	
 	// Present the backbuffer contents to the display
-	SwapChain->Present( 0, 0 );
+	SwapChain->Present(0, 0);
 }
 
 
 // Render a single text string at the given position in the given colour, may optionally centre it
-void RenderText( const string& text, int X, int Y, float r, float g, float b, bool centre = false )
+void RenderText(const string& text, int X, int Y, float r, float g, float b, bool centre = false)
 {
 	RECT rect;
 	if (!centre)
 	{
-		SetRect( &rect, X, Y, 0, 0 );
-		OSDFont->DrawText( NULL, text.c_str(), -1, &rect, DT_NOCLIP, D3DXCOLOR( r, g, b, 1.0f ) );
+		SetRect(&rect, X, Y, 0, 0);
+		OSDFont->DrawText(NULL, text.c_str(), -1, &rect, DT_NOCLIP, D3DXCOLOR(r, g, b, 1.0f));
 	}
 	else
 	{
-		SetRect( &rect, X - 100, Y, X + 100, 0 );
-		OSDFont->DrawText( NULL, text.c_str(), -1, &rect, DT_CENTER | DT_NOCLIP, D3DXCOLOR( r, g, b, 1.0f ) );
+		SetRect(&rect, X - 100, Y, X + 100, 0);
+		OSDFont->DrawText(NULL, text.c_str(), -1, &rect, DT_CENTER | DT_NOCLIP, D3DXCOLOR(r, g, b, 1.0f));
 	}
 }
 
@@ -581,65 +674,80 @@ void RenderSceneText()
 	if (AverageUpdateTime >= 0.0f)
 	{
 		outText << "Frame Time: " << AverageUpdateTime * 1000.0f << "ms" << endl << "FPS:" << 1.0f / AverageUpdateTime;
-		RenderText( outText.str(), 2, 2, 0.0f, 0.0f, 0.0f );
-		RenderText( outText.str(), 0, 0, 1.0f, 1.0f, 0.0f );
+		RenderText(outText.str(), 2, 2, 0.0f, 0.0f, 0.0f);
+		RenderText(outText.str(), 0, 0, 1.0f, 1.0f, 0.0f);
 		outText.str("");
 	}
 
 	// Output post-process name
 	outText << "Fullscreen Post-Process: ";
-	switch (FullScreenFilter)
-	{
-	case Copy: 
-		outText << "Copy";
-		break;
-	case Tint: 
-		outText << "Tint";
-		break;
-	case GreyNoise: 
-		outText << "Grey Noise";
-		break;
-	case Burn: 
-		outText << "Burn";
-		break;
-	case Distort: 
-		outText << "Distort";
-		break;
-	case Spiral: 
-		outText << "Spiral";
-		break;
-	case HeatHaze: 
-		outText << "Heat Haze";
-		break;
-	}
-	RenderText( outText.str(),  0, 32,  1.0f, 1.0f, 1.0f );
+	outText << PPTechniqueNames[FullScreenFilter];
+	//switch (FullScreenFilter)
+	//{
+	//case Copy: 
+	//	outText << "Copy";
+	//	break;
+	//case Tint: 
+	//	outText << "Tint";
+	//	break;
+	//case GreyNoise: 
+	//	outText << "Grey Noise";
+	//	break;
+	//case Burn: 
+	//	outText << "Burn";
+	//	break;
+	//case Distort: 
+	//	outText << "Distort";
+	//	break;
+	//case Spiral: 
+	//	outText << "Spiral";
+	//	break;
+	//case HeatHaze: 
+	//	outText << "Heat Haze";
+	//	break;
+	//}
+	RenderText(outText.str(), 0, 32, 1.0f, 1.0f, 1.0f);
 }
 
 
 // Update the scene between rendering
-void UpdateScene( float updateTime )
+void UpdateScene(float updateTime)
 {
 	// Call all entity update functions
-	EntityManager.UpdateAllEntities( updateTime );
+	EntityManager.UpdateAllEntities(updateTime);
 
 	// Update any post processes that need updates
-	UpdatePostProcesses( updateTime );
+	UpdatePostProcesses(updateTime);
 
 	// Set camera speeds
 	// Key F1 used for full screen toggle
-	if (KeyHit( Key_F2 )) CameraMoveSpeed = 5.0f;
-	if (KeyHit( Key_F3 )) CameraMoveSpeed = 40.0f;
-	if (KeyHit( Key_F4 )) CameraMoveSpeed = 160.0f;
-	if (KeyHit( Key_F5 )) CameraMoveSpeed = 640.0f;
+	if (KeyHit(Key_F2)) CameraMoveSpeed = 5.0f;
+	if (KeyHit(Key_F3)) CameraMoveSpeed = 40.0f;
+	if (KeyHit(Key_F4)) CameraMoveSpeed = 160.0f;
+	if (KeyHit(Key_F5)) CameraMoveSpeed = 640.0f;
 
 	// Choose post-process
-	if (KeyHit( Key_1 )) FullScreenFilter = Copy;
-	if (KeyHit( Key_2 )) FullScreenFilter = Tint;
-	if (KeyHit( Key_3 )) FullScreenFilter = GreyNoise;
-	if (KeyHit( Key_4 )) FullScreenFilter = Burn;
-	if (KeyHit( Key_5 )) FullScreenFilter = Distort;
-	if (KeyHit( Key_6 )) FullScreenFilter = Spiral;
-	if (KeyHit( Key_7 )) FullScreenFilter = HeatHaze;
+	if (KeyHit(Key_1)) FullScreenFilter = Copy;
+	if (KeyHit(Key_2)) FullScreenFilter = Tint;
+	if (KeyHit(Key_3)) FullScreenFilter = GreyNoise;
+	if (KeyHit(Key_4)) FullScreenFilter = Burn;
+	if (KeyHit(Key_5)) FullScreenFilter = Distort;
+	if (KeyHit(Key_6)) FullScreenFilter = Spiral;
+	if (KeyHit(Key_7)) FullScreenFilter = HeatHaze;
+	if (KeyHit(Key_8)) FullScreenFilter = GaussianBlur;
+	if (KeyHit(Key_9))
+	{
+		FullScreenFilter = Ripple;
+		RippleTime = 0.0f;
+		RipplePosition = MousePixel;
+	}
+	if (KeyHit(Key_0))
+	{
+		FullScreenFilter = Shockwave;
+		ShockwaveSin = 0.0f;
+		ShockwaveScale = 1.0f;
+	}
+
 
 	// Rotate cube and attach light to it
 	CEntity* cubey = EntityManager.GetEntity( "Cubey" );

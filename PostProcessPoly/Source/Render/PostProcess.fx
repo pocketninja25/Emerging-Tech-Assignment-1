@@ -27,6 +27,7 @@ float  RippleTime;
 float2 RipplePosition;
 float  ShockwaveScale;
 float  ShockwaveSin;
+int  BlurStrength;
 
 // Texture maps
 Texture2D SceneTexture;   // Texture containing the scene to copy to the full screen quad
@@ -35,6 +36,7 @@ Texture2D PreviousSceneTexture;	//Texture containing the scene that was presente
 Texture2D MultipassTexture;      //Texture for multipass methods to write to
 Texture2D FeedbackTexture;  //Texture containing last frames scene - for blur
 
+const float BlurWeights[5] = { 0.2270270270, 0.1945945946, 0.1216216216, 0.0540540541, 0.0162162162 };
 
 // Samplers to use with the above texture maps. Specifies texture filtering and addressing mode to use when accessing texture pixels
 // Usually use point sampling for the scene texture (i.e. no bilinear/trilinear blending) since don't want to blur it in the copy process
@@ -204,7 +206,7 @@ float4 PPBurnShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
     // Output black when current burn texture value below burning range
     if (burnTexture.r <= BurnLevel)
     {
-		return float4( 0.0f, 0.0f, 0.0f, 1.0f );
+		return float4( 1.0f, 1.0f, 1.0f, 1.0f );
 	}
     
     // Output scene texture untouched when current burnTexture texture value above burning range
@@ -329,51 +331,50 @@ float4 PPHeatHazeShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 // Gaussian Blur effect
 float4 PPGaussianBlurShaderHorizontal(PS_POSTPROCESS_INPUT ppIn) : SV_Target
 {
-	float baseOffset = 0.005f; //The offset each sample 
+	float baseOffset = 0.0005f * BlurStrength; //The offset each sample 
 	float2 offset = float2(baseOffset, baseOffset * SceneTextureHeight/SceneTextureWidth);	//Make the blur offset proportional to the scene texture size	
-	
+
 	//Sample the base colour
-    float3 ppColour = SceneTexture.Sample(BilinearClamp, ppIn.UVScene) * 0.1f;
+    float3 ppColour = SceneTexture.Sample(BilinearClamp, ppIn.UVScene) * BlurWeights[0];
 
     float3 FragmentColor = float3(0.0f, 0.0f, 0.0f);
 
-	//Merge with 15 samples in each direction (60 sample blur altogether)
-    for (int i = 1; i < 15; i++) {
+	//Merge with 5 samples in each direction (20 sample blur altogether)
+    for (int i = 1; i < 5; i++) {
 		//Use 0.2^i to simulate bell curve distribution of gaussian
 
 		// Vertical-pass																  	  
         FragmentColor +=
-			SceneTexture.Sample(BilinearClamp, ppIn.UVScene + float2(offset.x * i, 0.0f)) * pow(0.1f, i) +
-			SceneTexture.Sample(BilinearClamp, ppIn.UVScene - float2(offset.x * i, 0.0f)) * pow(0.1f, i);
+			SceneTexture.Sample(BilinearClamp, ppIn.UVScene + float2(offset.x * i, 0.0f)) * BlurWeights[i] + //* pow(0.3f, i) +
+			SceneTexture.Sample(BilinearClamp, ppIn.UVScene - float2(offset.x * i, 0.0f)) * BlurWeights[i]; //* pow(0.3f, i);
     }
 	//Add blur colour to base colour
 	ppColour += FragmentColor;    
-
 	return float4(ppColour, 1.0f);
 
 }
+
 float4 PPGaussianBlurShaderVertical(PS_POSTPROCESS_INPUT ppIn) : SV_Target
 {
-    float baseOffset = 0.005f; //The offset each sample 
+    float baseOffset = 0.0005f * BlurStrength; //The offset each sample 
     float2 offset = float2(baseOffset, baseOffset * SceneTextureHeight / SceneTextureWidth); //Make the blur offset proportional to the scene texture size	
 	
 	//Sample the base colour
-    float3 ppColour = MultipassTexture.Sample(BilinearClamp, ppIn.UVScene) * 0.1f;
+    float3 ppColour = MultipassTexture.Sample(BilinearClamp, ppIn.UVScene) * BlurWeights[0];
 
     float3 FragmentColor = float3(0.0f, 0.0f, 0.0f);
 
-	//Merge with 15 samples in each direction (60 sample blur altogether)
-    for (int i = 1; i < 15; i++)
+	//Merge with 2 samples in each direction (20 sample blur altogether)
+    for (int i = 1; i < 5; i++)
     {
 		//Use 0.2^i to simulate bell curve distribution of gaussian
 		// Vertical-pass																  	  
         FragmentColor +=
-			MultipassTexture.Sample(BilinearClamp, ppIn.UVScene + float2(offset.x * i, 0.0f)) * pow(0.1f, i) +
-			MultipassTexture.Sample(BilinearClamp, ppIn.UVScene - float2(offset.x * i, 0.0f)) * pow(0.1f, i);
+			MultipassTexture.Sample(BilinearClamp, ppIn.UVScene + float2(offset.y * i, 0.0f)) * BlurWeights[i] + // * pow(0.3f, i) +
+			MultipassTexture.Sample(BilinearClamp, ppIn.UVScene - float2(offset.y * i, 0.0f)) * BlurWeights[i]; // * pow(0.3f, i);
     }
 	//Add blur colour to base colour
     ppColour += FragmentColor;
-    ppColour *= 10;
     return float4(ppColour, 1.0f);
 
 }

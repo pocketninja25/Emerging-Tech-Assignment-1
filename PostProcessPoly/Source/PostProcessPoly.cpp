@@ -45,7 +45,7 @@ float RippleTime = 0.0f;
 CVector2 RipplePosition = CVector2(0.0f, 0.0f);
 float ShockwaveSin = 0.0f;
 float ShockwaveScale = 1.0f;
-
+float BlurStrength = 1.0f;
 
 // Separate effect file for full screen & area post-processes. Not necessary to use a separate file, but convenient given the architecture of this lab
 ID3D10Effect* PPEffect;
@@ -60,6 +60,7 @@ enum PostProcesses
 // Technique name for each post-process
 const string PPTechniqueNames[NumPostProcesses] = { "PPCopy", "PPTint", "PPGreyNoise", "PPBurn", "PPDistort", "PPSpiral", "PPHeatHaze", "PPGaussianBlur", "PPRipple", "PPShockwave", "PPNegative" };
 const int PPTechniquePassCount[NumPostProcesses] = {	1,		1,			1,				1,		1,				1,			1,			2,					1,			1,				1};
+
 
 // Technique pointers for each post-process
 ID3D10EffectTechnique* PPTechniques[NumPostProcesses];
@@ -130,6 +131,7 @@ ID3D10EffectScalarVariable* RippleTimeVar = NULL;
 ID3D10EffectVectorVariable* RipplePositionVar = NULL;
 ID3D10EffectScalarVariable* ShockwaveScaleVar = NULL;
 ID3D10EffectScalarVariable* ShockwaveSinVar = NULL;
+ID3D10EffectScalarVariable* BlurStrengthVar = NULL;
 
 //*****************************************************************************
 
@@ -173,7 +175,6 @@ extern CVector2 MousePixel;
 
 // Messenger class for sending messages to and between entities
 extern CMessenger Messenger;
-
 
 //-----------------------------------------------------------------------------
 // Global game/scene variables
@@ -357,6 +358,7 @@ bool PostProcessSetup()
 	RipplePositionVar	 = PPEffect->GetVariableByName( "RipplePosition" )->AsVector();
 	ShockwaveScaleVar	 = PPEffect->GetVariableByName( "ShockwaveScale")->AsScalar();
 	ShockwaveSinVar		 = PPEffect->GetVariableByName( "ShockwaveSin")->AsScalar();
+	BlurStrengthVar		 = PPEffect->GetVariableByName( "BlurStrength")->AsScalar();
 
 	FullScreenFilterList.push_back(Copy);
 
@@ -457,6 +459,7 @@ void SelectPostProcess( PostProcesses filter )
 
 		case GaussianBlur:
 		{
+			BlurStrengthVar->SetFloat(BlurStrength);
 			break;
 		}
 
@@ -475,6 +478,7 @@ void SelectPostProcess( PostProcesses filter )
 			ShockwaveScaleVar->SetFloat(ShockwaveScale);
 			break;
 		}
+
 	}
 }
 
@@ -523,6 +527,7 @@ void UpdatePostProcesses( float updateTime )
 		if (KeyHit(Key_2))
 		{
 			FullScreenFilterList.push_back(GaussianBlur);
+			BlurStrength = 1.0f;
 			AddingFilter = false;
 		}
 		if (KeyHit(Key_4))
@@ -540,6 +545,11 @@ void UpdatePostProcesses( float updateTime )
 		if (KeyHit(Key_5))
 		{
 			FullScreenFilterList.push_back(GreyNoise);
+			AddingFilter = false;
+		}	
+		if (KeyHit(Key_6))
+		{
+			FullScreenFilterList.push_back(Burn);
 			AddingFilter = false;
 		}
 	}
@@ -560,6 +570,7 @@ void UpdatePostProcesses( float updateTime )
 		RipplePosition = MousePixel;
 	}
 
+
 	/*if (KeyHit(Key_1))  FullScreenFilterList.push_back(Copy);
 	if (KeyHit(Key_2))  FullScreenFilterList.push_back(Tint);
 	if (KeyHit(Key_4))  FullScreenFilterList.push_back(Burn);
@@ -567,6 +578,8 @@ void UpdatePostProcesses( float updateTime )
 	if (KeyHit(Key_6))  FullScreenFilterList.push_back(Spiral);
 	if (KeyHit(Key_7))  FullScreenFilterList.push_back(HeatHaze);*/
 	
+	//*******************************************************************
+
 	// Not all post processes need updating
 	BurnLevel = Mod( BurnLevel + BurnSpeed * updateTime, 1.0f );
 	SpiralTimer   += SpiralSpeed * updateTime;
@@ -591,6 +604,20 @@ void UpdatePostProcesses( float updateTime )
 		RemovePostProcessFromList(Shockwave);
 	}
 	ShockwaveSin += 0.20;
+
+	if (KeyHeld(Key_P))
+	{
+		BlurStrength += 0.01f;
+	}
+	if (KeyHeld(Key_O))
+	{
+		BlurStrength -= 0.01f;
+		
+		if (BlurStrength < 0)
+		{
+			BlurStrength = 0.0f;
+		}
+	}
 
 }
 

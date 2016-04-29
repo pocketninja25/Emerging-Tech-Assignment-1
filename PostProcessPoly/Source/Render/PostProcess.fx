@@ -35,6 +35,7 @@ Texture2D PreviousSceneTexture;	//Texture containing the scene that was presente
 Texture2D MultipassTexture;      //Texture for multipass methods to write to
 Texture2D FeedbackTexture;  //Texture containing last frames scene - for blur
 
+
 // Samplers to use with the above texture maps. Specifies texture filtering and addressing mode to use when accessing texture pixels
 // Usually use point sampling for the scene texture (i.e. no bilinear/trilinear blending) since don't want to blur it in the copy process
 SamplerState PointClamp
@@ -326,34 +327,54 @@ float4 PPHeatHazeShader( PS_POSTPROCESS_INPUT ppIn ) : SV_Target
 }
 
 // Gaussian Blur effect
-float4 PPGaussianBlurShader1(PS_POSTPROCESS_INPUT ppIn) : SV_Target
+float4 PPGaussianBlurShaderHorizontal(PS_POSTPROCESS_INPUT ppIn) : SV_Target
 {
 	float baseOffset = 0.005f; //The offset each sample 
 	float2 offset = float2(baseOffset, baseOffset * SceneTextureHeight/SceneTextureWidth);	//Make the blur offset proportional to the scene texture size	
 	
 	//Sample the base colour
-    float3 ppColour = SceneTexture.Sample(BilinearClamp, ppIn.UVScene) * 0.2f;
+    float3 ppColour = SceneTexture.Sample(BilinearClamp, ppIn.UVScene) * 0.1f;
 
     float3 FragmentColor = float3(0.0f, 0.0f, 0.0f);
 
 	//Merge with 15 samples in each direction (60 sample blur altogether)
     for (int i = 1; i < 15; i++) {
 		//Use 0.2^i to simulate bell curve distribution of gaussian
-        // Horizontal-pass
-        FragmentColor +=
-            SceneTexture.Sample(BilinearClamp, ppIn.UVScene + float2(0.0f, offset.x * i))*pow(0.2f,i) +
-            SceneTexture.Sample(BilinearClamp, ppIn.UVScene - float2(0.0f, offset.x * i))*pow(0.2f,i);      
 
 		// Vertical-pass																  	  
-		FragmentColor +=																	  
-			SceneTexture.Sample(BilinearClamp, ppIn.UVScene + float2(offset.y * i, 0.0f))*pow(0.2f, i) +
-			SceneTexture.Sample(BilinearClamp, ppIn.UVScene - float2(offset.y * i, 0.0f))*pow(0.2f, i);
-		
-	}
+        FragmentColor +=
+			SceneTexture.Sample(BilinearClamp, ppIn.UVScene + float2(offset.x * i, 0.0f)) * pow(0.1f, i) +
+			SceneTexture.Sample(BilinearClamp, ppIn.UVScene - float2(offset.x * i, 0.0f)) * pow(0.1f, i);
+    }
 	//Add blur colour to base colour
 	ppColour += FragmentColor;    
 
 	return float4(ppColour, 1.0f);
+
+}
+float4 PPGaussianBlurShaderVertical(PS_POSTPROCESS_INPUT ppIn) : SV_Target
+{
+    float baseOffset = 0.005f; //The offset each sample 
+    float2 offset = float2(baseOffset, baseOffset * SceneTextureHeight / SceneTextureWidth); //Make the blur offset proportional to the scene texture size	
+	
+	//Sample the base colour
+    float3 ppColour = MultipassTexture.Sample(BilinearClamp, ppIn.UVScene) * 0.1f;
+
+    float3 FragmentColor = float3(0.0f, 0.0f, 0.0f);
+
+	//Merge with 15 samples in each direction (60 sample blur altogether)
+    for (int i = 1; i < 15; i++)
+    {
+		//Use 0.2^i to simulate bell curve distribution of gaussian
+		// Vertical-pass																  	  
+        FragmentColor +=
+			MultipassTexture.Sample(BilinearClamp, ppIn.UVScene + float2(offset.x * i, 0.0f)) * pow(0.1f, i) +
+			MultipassTexture.Sample(BilinearClamp, ppIn.UVScene - float2(offset.x * i, 0.0f)) * pow(0.1f, i);
+    }
+	//Add blur colour to base colour
+    ppColour += FragmentColor;
+    ppColour *= 10;
+    return float4(ppColour, 1.0f);
 
 }
 
@@ -406,8 +427,7 @@ float4 PPNegativeShader(PS_POSTPROCESS_INPUT ppIn) : SV_Target
 
 float4 PPFeedbackShader(PS_POSTPROCESS_INPUT ppIn) : SV_Target
 {
-	float3 ppColour = float3(0.0f, 0.0f, 0.0f);
-
+    float3 ppColour = (MultipassTexture.Sample(PointClamp, ppIn.UVScene) * 0.1) + (PreviousSceneTexture.Sample(PointClamp, ppIn.UVScene) * 0.9);
 
 	return float4(ppColour, 1.0f);
 }
@@ -570,12 +590,22 @@ technique10 PPGaussianBlur
 	{
 		SetVertexShader(CompileShader(vs_4_0, PPQuad()));
 		SetGeometryShader(NULL);
-		SetPixelShader(CompileShader(ps_4_0, PPGaussianBlurShader1()));
+		SetPixelShader(CompileShader(ps_4_0, PPGaussianBlurShaderHorizontal()));
 	
 		SetBlendState(AlphaBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
 		SetRasterizerState(CullBack);
 		SetDepthStencilState(DepthWritesOff, 0);
 	}
+    pass P1
+    {
+        SetVertexShader(CompileShader(vs_4_0, PPQuad()));
+        SetGeometryShader(NULL);
+        SetPixelShader(CompileShader(ps_4_0, PPGaussianBlurShaderVertical()));
+	
+        SetBlendState(AlphaBlending, float4(0.0f, 0.0f, 0.0f, 0.0f), 0xFFFFFFFF);
+        SetRasterizerState(CullBack);
+        SetDepthStencilState(DepthWritesOff, 0);
+    }
 }
 
 // Ripple

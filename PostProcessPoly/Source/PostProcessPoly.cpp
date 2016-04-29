@@ -26,15 +26,11 @@ using namespace std;
 namespace gen
 {
 
+const float kPi = 3.1416;
+
 //*****************************************************************************
 // Post-process data
 //*****************************************************************************
-
-
-
-
-
-const float kPi = 3.1416;
 
 // Post-process settings
 float BurnLevel = 0.0f;
@@ -50,6 +46,7 @@ CVector2 RipplePosition = CVector2(0.0f, 0.0f);
 float ShockwaveSin = 0.0f;
 float ShockwaveScale = 1.0f;
 
+
 // Separate effect file for full screen & area post-processes. Not necessary to use a separate file, but convenient given the architecture of this lab
 ID3D10Effect* PPEffect;
 
@@ -59,16 +56,17 @@ enum PostProcesses
 	Copy, Tint, GreyNoise, Burn, Distort, Spiral, HeatHaze, GaussianBlur, Ripple, Shockwave, Negative,
 	NumPostProcesses
 };
+
 // Technique name for each post-process
-const string PPTechniqueNames[NumPostProcesses] = {	"PPCopy", "PPTint", "PPGreyNoise", "PPBurn", "PPDistort", "PPSpiral", "PPHeatHaze", "PPGaussianBlur", "PPRipple", "PPShockwave", "PPNegative" };
+const string PPTechniqueNames[NumPostProcesses] = { "PPCopy", "PPTint", "PPGreyNoise", "PPBurn", "PPDistort", "PPSpiral", "PPHeatHaze", "PPGaussianBlur", "PPRipple", "PPShockwave", "PPNegative" };
+const int PPTechniquePassCount[NumPostProcesses] = {	1,		1,			1,				1,		1,				1,			1,			2,					1,			1,				1};
 
 // Technique pointers for each post-process
 ID3D10EffectTechnique* PPTechniques[NumPostProcesses];
 
 // Currently used post process
 PostProcesses FullScreenFilter = Copy;
-vector<PostProcesses> FullScreenFilterList;
-
+list<PostProcesses> FullScreenFilterList;
 
 // Will render the scene to a texture in a first pass, then copy that texture to the back buffer in a second post-processing pass
 // So need a texture and two "views": a render target view (to render into the texture - 1st pass) and a shader resource view (use the rendered texture as a normal texture - 2nd pass)
@@ -93,13 +91,13 @@ struct Texture2D
 	}
 };
 
-Texture2D SceneTexture = Texture2D();
 Texture2D BufferTextureA = Texture2D();
 Texture2D BufferTextureB = Texture2D();
 Texture2D* WriteBuffer = &BufferTextureA;
 Texture2D* ReadBuffer = &BufferTextureB;
 
-
+Texture2D LastFrameBuffer = Texture2D();
+Texture2D MultipassBuffer = Texture2D();
 
 // Additional textures used by post-processes
 ID3D10ShaderResourceView* NoiseMap = NULL;
@@ -109,6 +107,8 @@ ID3D10ShaderResourceView* DistortMap = NULL;
 // Variables to link C++ post-process textures to HLSL shader variables (for area / full-screen post-processing)
 ID3D10EffectShaderResourceVariable* SceneTextureVar = NULL;
 ID3D10EffectShaderResourceVariable* PostProcessMapVar = NULL; // Single shader variable used for the three maps above (noise, burn, distort). Only one is needed at a time
+ID3D10EffectShaderResourceVariable* PreviousSceneTextureVar = NULL;
+ID3D10EffectShaderResourceVariable* MultipassTextureVar = NULL;
 
 
 // Variables specifying the area used for post-processing
@@ -194,6 +194,7 @@ float SumUpdateTimes = 0.0f;
 int NumUpdateTimes = 0;
 float AverageUpdateTime = -1.0f; // Invalid value at first
 
+bool AddingFilter = false;
 
 //-----------------------------------------------------------------------------
 // Game Constants
@@ -288,15 +289,17 @@ bool PostProcessSetup()
 	textureDesc.BindFlags = D3D10_BIND_RENDER_TARGET | D3D10_BIND_SHADER_RESOURCE; // Indicate we will use texture as render target, and pass it to shaders
 	textureDesc.CPUAccessFlags = 0;
 	textureDesc.MiscFlags = 0;
-	if (FAILED(g_pd3dDevice->CreateTexture2D(&textureDesc, NULL, &SceneTexture.Texture))) return false;
 	if (FAILED(g_pd3dDevice->CreateTexture2D(&textureDesc, NULL, &BufferTextureA.Texture))) return false;
 	if (FAILED(g_pd3dDevice->CreateTexture2D( &textureDesc, NULL, &BufferTextureB.Texture ))) return false;
+	if (FAILED(g_pd3dDevice->CreateTexture2D(&textureDesc, NULL, &LastFrameBuffer.Texture))) return false;
+	if (FAILED(g_pd3dDevice->CreateTexture2D(&textureDesc, NULL, &MultipassBuffer.Texture))) return false;
 
 
 	// Get a "view" of the texture as a render target - giving us an interface for rendering to the texture
-	if (FAILED(g_pd3dDevice->CreateRenderTargetView(SceneTexture.Texture, NULL, &SceneTexture.Target))) return false;
 	if (FAILED(g_pd3dDevice->CreateRenderTargetView(BufferTextureA.Texture, NULL, &BufferTextureA.Target))) return false;
-	if (FAILED(g_pd3dDevice->CreateRenderTargetView(BufferTextureB.Texture, NULL, &BufferTextureB.Target ))) return false;
+	if (FAILED(g_pd3dDevice->CreateRenderTargetView(BufferTextureB.Texture, NULL, &BufferTextureB.Target))) return false;
+	if (FAILED(g_pd3dDevice->CreateRenderTargetView(LastFrameBuffer.Texture, NULL, &LastFrameBuffer.Target ))) return false;
+	if (FAILED(g_pd3dDevice->CreateRenderTargetView(MultipassBuffer.Texture, NULL, &MultipassBuffer.Target ))) return false;
 
 	// And get a shader-resource "view" - giving us an interface for passing the texture to shaders
 	D3D10_SHADER_RESOURCE_VIEW_DESC srDesc;
@@ -304,9 +307,10 @@ bool PostProcessSetup()
 	srDesc.ViewDimension = D3D10_SRV_DIMENSION_TEXTURE2D;
 	srDesc.Texture2D.MostDetailedMip = 0;
 	srDesc.Texture2D.MipLevels = 1;
-	if (FAILED(g_pd3dDevice->CreateShaderResourceView(SceneTexture.Texture, &srDesc, &SceneTexture.Resource))) return false;
 	if (FAILED(g_pd3dDevice->CreateShaderResourceView(BufferTextureA.Texture, &srDesc, &BufferTextureA.Resource))) return false;
-	if (FAILED(g_pd3dDevice->CreateShaderResourceView(BufferTextureB.Texture, &srDesc, &BufferTextureB.Resource ))) return false;
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(BufferTextureB.Texture, &srDesc, &BufferTextureB.Resource))) return false;
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(LastFrameBuffer.Texture, &srDesc, &LastFrameBuffer.Resource ))) return false;
+	if (FAILED(g_pd3dDevice->CreateShaderResourceView(MultipassBuffer.Texture, &srDesc, &MultipassBuffer.Resource ))) return false;
 
 	// Load post-processing support textures
 	if (FAILED( D3DX10CreateShaderResourceViewFromFile( g_pd3dDevice, (MediaFolder + "Noise.png").c_str() ,   NULL, NULL, &NoiseMap,   NULL ) )) return false;
@@ -335,6 +339,8 @@ bool PostProcessSetup()
 	// Link to HLSL variables in post-process shaders
 	SceneTextureVar      = PPEffect->GetVariableByName( "SceneTexture" )->AsShaderResource();
 	PostProcessMapVar    = PPEffect->GetVariableByName( "PostProcessMap" )->AsShaderResource();
+	PreviousSceneTextureVar = PPEffect->GetVariableByName("PreviousSceneTexture")->AsShaderResource();
+	MultipassTextureVar = PPEffect->GetVariableByName("MultipassTexture")->AsShaderResource();
 	PPAreaTopLeftVar     = PPEffect->GetVariableByName( "PPAreaTopLeft" )->AsVector();
 	PPAreaBottomRightVar = PPEffect->GetVariableByName( "PPAreaBottomRight" )->AsVector();
 	PPAreaDepthVar       = PPEffect->GetVariableByName( "PPAreaDepth" )->AsScalar();
@@ -364,9 +370,10 @@ void PostProcessShutdown()
 	if (BurnMap)             BurnMap->Release();
 	if (NoiseMap)            NoiseMap->Release();
 
-	SceneTexture.SafeRelease();
 	BufferTextureA.SafeRelease();
 	BufferTextureB.SafeRelease();
+	LastFrameBuffer.SafeRelease();	
+	MultipassBuffer.SafeRelease();
 
 }
 //*****************************************************************************
@@ -471,9 +478,95 @@ void SelectPostProcess( PostProcesses filter )
 	}
 }
 
+void RemovePostProcessFromList(PostProcesses removal)
+{
+	for (list<PostProcesses>::iterator it = FullScreenFilterList.begin(); it != FullScreenFilterList.end();)
+	{
+		if ((*it) == removal)
+		{
+			it = FullScreenFilterList.erase(it);
+		}
+		else
+		{
+			it++;
+		}
+	}
+}
+
 // Update post-processes (those that need updating) during scene update
 void UpdatePostProcesses( float updateTime )
 {
+	if (KeyHit(Key_Plus))
+	{
+		AddingFilter = !AddingFilter;
+	}
+	if (KeyHit(Key_Minus))
+	{
+		if (FullScreenFilterList.size() > 1)
+		{
+			FullScreenFilterList.pop_back();
+		}
+	}
+	if (KeyHit(Key_Back))
+	{
+		FullScreenFilterList.clear();
+		FullScreenFilterList.push_back(Copy);
+	}
+	// Choose post-process
+	if (AddingFilter)
+	{
+		if (KeyHit(Key_1))
+		{
+			FullScreenFilterList.push_back(Tint);
+			AddingFilter = false;
+		}
+		if (KeyHit(Key_2))
+		{
+			FullScreenFilterList.push_back(GaussianBlur);
+			AddingFilter = false;
+		}
+		if (KeyHit(Key_4))
+		{
+			if (FullScreenFilterList.back() == Negative)
+			{
+				FullScreenFilterList.pop_back();
+			}
+			else
+			{
+				FullScreenFilterList.push_back(Negative);
+			}
+			AddingFilter = false;
+		}
+		if (KeyHit(Key_5))
+		{
+			FullScreenFilterList.push_back(GreyNoise);
+			AddingFilter = false;
+		}
+	}
+	if (KeyHit(Key_3))
+	{
+		RemovePostProcessFromList(Shockwave);
+		FullScreenFilterList.push_back(Shockwave);
+		//Restart shockwave values
+		ShockwaveSin = 0.0f;
+		ShockwaveScale = 1.0f;
+	}
+	if (KeyHit(Mouse_RButton))
+	{
+		RemovePostProcessFromList(Ripple);
+		FullScreenFilterList.push_back(Ripple);
+		//Restart shockwave values
+		RippleTime = 0.0f;
+		RipplePosition = MousePixel;
+	}
+
+	/*if (KeyHit(Key_1))  FullScreenFilterList.push_back(Copy);
+	if (KeyHit(Key_2))  FullScreenFilterList.push_back(Tint);
+	if (KeyHit(Key_4))  FullScreenFilterList.push_back(Burn);
+	if (KeyHit(Key_5)) FullScreenFilterList.push_back(Distort);
+	if (KeyHit(Key_6))  FullScreenFilterList.push_back(Spiral);
+	if (KeyHit(Key_7))  FullScreenFilterList.push_back(HeatHaze);*/
+	
 	// Not all post processes need updating
 	BurnLevel = Mod( BurnLevel + BurnSpeed * updateTime, 1.0f );
 	SpiralTimer   += SpiralSpeed * updateTime;
@@ -481,7 +574,13 @@ void UpdatePostProcesses( float updateTime )
 	TintColourHSL.x += TintHueSpeed * updateTime;
 	if (TintColourHSL.x > 1.0f)
 		TintColourHSL.x -= 1.0f;
+
+	if (RippleTime > 3.0f)
+	{
+		RemovePostProcessFromList(Ripple);
+	}
 	RippleTime += updateTime;
+
 
 	if (ShockwaveScale > 0)
 	{
@@ -489,7 +588,7 @@ void UpdatePostProcesses( float updateTime )
 	}
 	else
 	{
-		ShockwaveScale = 0.0f;
+		RemovePostProcessFromList(Shockwave);
 	}
 	ShockwaveSin += 0.20;
 
@@ -590,12 +689,13 @@ void RenderBaseScene(ID3D10RenderTargetView* renderTarget)
 
 void RenderFullscreenPostProcess(PostProcesses filter, ID3D10RenderTargetView* renderTarget, ID3D10ShaderResourceView* shaderResource)
 {
+
 	//------------------------------------------------
 	// FULL SCREEN POST PROCESS RENDER PASS - Render full screen quad on the back-buffer mapped with the scene texture, with post-processing
 
 	// Select the back buffer to use for rendering (will ignore depth-buffer for full-screen quad) and select scene texture for use in shader
-	g_pd3dDevice->OMSetRenderTargets(1, &renderTarget, DepthStencilView); // No need to clear the back-buffer, we're going to overwrite it all
 	SceneTextureVar->SetResource(shaderResource);
+	PreviousSceneTextureVar->SetResource(LastFrameBuffer.Resource);
 
 	// Prepare shader settings for the current full screen filter
 	SelectPostProcess(filter);
@@ -605,10 +705,31 @@ void RenderFullscreenPostProcess(PostProcesses filter, ID3D10RenderTargetView* r
 									// Select technique to match currently selected post-process
 	g_pd3dDevice->IASetInputLayout(NULL);
 	g_pd3dDevice->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+	
+	if(PPTechniquePassCount[filter] > 1)	//More than one pass
+	{
+		//Write to multipass buffer
+		g_pd3dDevice->OMSetRenderTargets(1, &MultipassBuffer.Target, DepthStencilView); // No need to clear the back-buffer, we're going to overwrite it all
+	}
+	else
+	{
+		//Write to render target
+		g_pd3dDevice->OMSetRenderTargets(1, &renderTarget, DepthStencilView); // No need to clear the back-buffer, we're going to overwrite it all
+	}
+	//Perform 0th pass
 	PPTechniques[filter]->GetPassByIndex(0)->Apply(0);
-
-
 	g_pd3dDevice->Draw(4, 0);
+	
+	if (PPTechniquePassCount[filter] > 1)
+	{
+		MultipassTextureVar->SetResource(MultipassBuffer.Resource);
+		g_pd3dDevice->OMSetRenderTargets(1, &renderTarget, DepthStencilView); // No need to clear the back-buffer, we're going to overwrite it all
+
+		PPTechniques[filter]->GetPassByIndex(1)->Apply(0);
+		g_pd3dDevice->Draw(4, 0);
+
+	}
+
 
 	//------------------------------------------------
 }
@@ -684,36 +805,34 @@ void RenderScene()
 	
 	//-----------------------------------------------
 	//Make Read and write buffers have same information so that drawing polygons can effectively write to their own source information
-	CycleReadWriteBuffers(false);
-	RenderFullscreenPostProcess(Copy, WriteBuffer->Target, ReadBuffer->Resource);
-	
+
+	g_pd3dDevice->CopyResource(ReadBuffer->Texture, WriteBuffer->Texture);
 	RenderPostProcessedPolygons(WriteBuffer->Target, ReadBuffer->Resource);
 	
 	//------------------------------------------------
 	//Make Read and write buffers have same information so that drawing AreaPostProcess can effectively write to its own source information
 
-	CycleReadWriteBuffers(false);
-
-	RenderFullscreenPostProcess(Copy, WriteBuffer->Target, ReadBuffer->Resource);
-
+	g_pd3dDevice->CopyResource(ReadBuffer->Texture, WriteBuffer->Texture);
 	RenderAreaPostProcess(Spiral, WriteBuffer->Target, ReadBuffer->Resource, EntityManager.GetEntity("Cubey")->Position(), 20.0f, 20.0f, -9.0f);
 	
 	//------------------------------------------------
 
-	for (int i = 0; i < FullScreenFilterList.size(); i++)
+	for (auto Filter : FullScreenFilterList)
 	{
-		CycleReadWriteBuffers(true);
+		CycleReadWriteBuffers(false);
 
-		RenderFullscreenPostProcess(FullScreenFilterList[i], WriteBuffer->Target, ReadBuffer->Resource);
+		RenderFullscreenPostProcess(Filter, WriteBuffer->Target, ReadBuffer->Resource );
 
 	}
 		
+	//Save scene for use next frame and Render to back buffer
 	CycleReadWriteBuffers(true);
-
-	RenderFullscreenPostProcess(Copy, BackBufferRenderTarget, ReadBuffer->Resource);
+	g_pd3dDevice->CopyResource(LastFrameBuffer.Texture, ReadBuffer->Texture);
+	RenderFullscreenPostProcess(Copy, BackBufferRenderTarget, LastFrameBuffer.Resource);
 
 	// These two lines unbind the scene texture from the shader to stop DirectX issuing a warning when we try to render to it again next frame
-	SceneTextureVar->SetResource( 0 );
+	SceneTextureVar->SetResource(0);
+	PreviousSceneTextureVar->SetResource( 0 );
 	PPTechniques[FullScreenFilter]->GetPassByIndex(0)->Apply(0);
 
 	// Render UI elements last - don't want them post-processed
@@ -754,8 +873,11 @@ void RenderSceneText()
 	}
 
 	// Output post-process name
-	outText << "Fullscreen Post-Process: ";
-	outText << PPTechniqueNames[FullScreenFilter];
+	outText << "Fullscreen Post-Process Chain: " << endl;
+	for (auto Filter : FullScreenFilterList)
+	{
+		outText << PPTechniqueNames[Filter] << endl;
+	}
 	//switch (FullScreenFilter)
 	//{
 	//case Copy: 
@@ -800,31 +922,7 @@ void UpdateScene(float updateTime)
 	if (KeyHit(Key_F4)) CameraMoveSpeed = 160.0f;
 	if (KeyHit(Key_F5)) CameraMoveSpeed = 640.0f;
 
-	// Choose post-process
-	if (KeyHit(Key_1)) FullScreenFilterList.push_back(Copy);
-	if (KeyHit(Key_2))  FullScreenFilterList.push_back(Tint);
-	if (KeyHit(Key_3))  FullScreenFilterList.push_back(GreyNoise);
-	if (KeyHit(Key_4))  FullScreenFilterList.push_back(Burn);
-	if (KeyHit(Key_5)) FullScreenFilterList.push_back(Distort);
-	if (KeyHit(Key_6))  FullScreenFilterList.push_back(Spiral);
-	if (KeyHit(Key_7))  FullScreenFilterList.push_back(HeatHaze);
-	if (KeyHit(Key_8))  FullScreenFilterList.push_back(GaussianBlur);
-	if (KeyHit(Key_9))
-	{
-		FullScreenFilterList.push_back(Ripple);
-		RippleTime = 0.0f;
-		RipplePosition = MousePixel;
-	}
-	if (KeyHit(Key_0))
-	{
-		FullScreenFilterList.push_back(Shockwave);
-		ShockwaveSin = 0.0f;
-		ShockwaveScale = 1.0f;
-	}
-	if (KeyHit(Key_Back))
-	{
-		FullScreenFilterList.push_back(Negative);
-	}
+	
 
 	// Rotate cube and attach light to it
 	CEntity* cubey = EntityManager.GetEntity( "Cubey" );
